@@ -93,7 +93,7 @@ Purpose: rename account, change type, etc. Only editable if it belongs to the ca
 Purpose: list categories available to the user.
 
 * Includes both global system categories (`user_id = null`, readonly) and user-created categories.
-* Each item: `id`, `name`, `flow_type` (`income` / `outcome`), and a flag that tells the UI if it's system or user-owned.
+* Each item: `id`, `name`, `flow_type` (`income` / `outcome`), and a key that tells the UI if it's system or user-owned.
 * Used by: invoice flow (dropdown), manual transaction entry, budgets.
 
 ### `POST /categories`
@@ -115,27 +115,27 @@ A `transaction` is one money movement (income or outcome). It may optionally be 
 
 {
 
-"id": "...",
-
-"account_id": "...",
-
-"category_id": "...",
-
-"flow_type": "income" | "outcome",
-
-"amount": 128.50,
-
-"date": "2025-10-30T14:32:00-06:00",
-
-"description": "Super Despensa Familiar Zona 11",
-
-"invoice_id": "..." | null,
-
-"paired_transaction_id": "..." | null,
-
-"account_name": "...", // convenience for UI
-
-"category_name": "Supermercado" // convenience for UI
+	"id": "...",
+	
+	"account_id": "...",
+	
+	"category_id": "...",
+	
+	"flow_type": "income" | "outcome",
+	
+	"amount": 128.50,
+	
+	"date": "2025-10-30T14:32:00-06:00",
+	
+	"description": "Super Despensa Familiar Zona 11",
+	
+	"invoice_id": "..." | null,
+	
+	"paired_transaction_id": "..." | null,
+	
+	"account_name": "...", // convenience for UI
+	
+	"category_name": "Supermercado" // convenience for UI
 
 }
 
@@ -183,7 +183,7 @@ Purpose: delete a single transaction.
 ## 4. Invoice Flow (OCR → preview → commit)
 
 This flow is tightly defined by the InvoiceAgent contract.
-It writes to real tables: `invoice`, `invoice_item`, and `transaction`.
+It writes to real tables: `invoice`, and `transaction`.
 
 ### `POST /invoices/ocr`
 
@@ -219,33 +219,33 @@ Front-end: show error / pedir nueva foto. Nothing is stored.
 
 {
 
-"status": "DRAFT",
-
-"store_name": "Super Despensa Familiar Zona 11",
-
-"purchase_datetime": "2025-10-30T14:32:00-06:00",
-
-"total_amount": 128.50,
-
-"currency": "GTQ",
-
-"items": [
-
-{"description": "Leche deslactosada 1L", "quantity": 2, "unit_price": 17.50, "total_price": 35.00},
-
-{"description": "Pan molde integral", "quantity": 1, "unit_price": 22.50, "total_price": 22.50}
-
-],
-
-"category_suggestion": {
-
-"match_type": "EXISTING" | "NEW_PROPOSED",
-
-"category_id": "uuid-de-supermercado" | null,
-
-"category_name": "Supermercado" | "Mascotas"
-
-}
+	"status": "DRAFT",
+	
+	"store_name": "Super Despensa Familiar Zona 11",
+	
+	"purchase_datetime": "2025-10-30T14:32:00-06:00",
+	
+	"total_amount": 128.50,
+	
+	"currency": "GTQ",
+	
+	"items": [
+	
+		{"description": "Leche deslactosada 1L", "quantity": 2, "unit_price": 17.50, "total_price": 35.00},
+		
+		{"description": "Pan molde integral", "quantity": 1, "unit_price": 22.50, "total_price": 22.50}
+	
+	],
+	
+	"category_suggestion": {
+	
+		"match_type": "EXISTING" | "NEW_PROPOSED",
+		
+		"category_id": "uuid-de-supermercado" | null,
+		
+		"category_name": "Supermercado" | "Mascotas"
+	
+	}
 
 }
 
@@ -254,7 +254,7 @@ Front-end: show error / pedir nueva foto. Nothing is stored.
 Front-end: render preview screen. User can edit account, category, etc. Still nothing persisted yet.
 
 Rules:
-* `/invoices/ocr` NEVER persists to DB. No `invoice`, no `transaction`, no `invoice_item` row is inserted yet.
+* `/invoices/ocr` NEVER persists to DB. No `invoice`, no `transaction` row is inserted yet.
 * If the image is unreadable or not actually a receipt, you only get `INVALID_IMAGE`.
 
 ### `POST /invoices/commit`
@@ -267,43 +267,42 @@ Purpose: the user confirmed / edited the OCR draft and wants to save it as a rea
 
 {
 
-"invoice_data": {
-
-"store_name": "Super Despensa Familiar Zona 11",
-
-"purchase_datetime": "2025-10-30T14:32:00-06:00",
-
-"total_amount": 128.50,
-
-"currency": "GTQ",
-
-"items": [
-
-{"description": "Leche deslactosada 1L", "quantity": 2, "total_price": 35.00},
-
-{"description": "Pan molde integral", "quantity": 1, "total_price": 22.50}
-
-],
-
-"category_id": "uuid-category-seleccionada",
-
-"account_id": "uuid-cuenta-a-afectar",
-
-"flow_type": "outcome"
-
-},
-
-"image": (optional binary OR reference to temp buffer)
+	"invoice_data": {
+	
+		"store_name": "Super Despensa Familiar Zona 11",
+		
+		"purchase_datetime": "2025-10-30T14:32:00-06:00",
+		
+		"total_amount": 128.50,
+		
+		"currency": "GTQ",
+		
+		"items": [
+		
+			{"description": "Leche deslactosada 1L", "quantity": 2, "total_price": 35.00},
+		
+			{"description": "Pan molde integral", "quantity": 1, "total_price": 22.50}
+		
+		],
+		
+		"category_id": "uuid-category-seleccionada",
+		
+		"account_id": "uuid-cuenta-a-afectar",
+		
+		"flow_type": "outcome"
+	
+	},
+	
+	"image": (optional binary OR reference to temp buffer)
 
 }
 
 ```
 
-
 * Backend behavior (atomic):
 1. Resolve `user_id` from the token.
 2. Upload the receipt image to storage and record the `storage_path` + `extracted_text`.
-3. Insert new row in `invoice` (and `invoice_item` rows for line items).
+3. Insert new row in `invoice.
 4. Insert new row in `transaction`:
 	* `user_id`
 	* `account_id`
@@ -320,11 +319,11 @@ Purpose: the user confirmed / edited the OCR draft and wants to save it as a rea
 
 {
 
-"status": "COMMITTED",
-
-"transaction_id": "...",
-
-"invoice_id": "..."
+	"status": "COMMITTED",
+	
+	"transaction_id": "...",
+	
+	"invoice_id": "..."
 
 }
 
@@ -492,15 +491,15 @@ Purpose: ask for product suggestions or continue an ongoing clarification loop.
 
 {
 
-"query_raw": "texto libre que el usuario escribió",
-
-"budget_hint": 7000,
-
-"extra_details": {
-
-// merged answers the user already gave in previous steps
-
-}
+	"query_raw": "texto libre que el usuario escribió",
+	
+	"budget_hint": 7000,
+	
+	"extra_details": {
+	
+	// merged answers the user already gave in previous steps
+	
+	}
 
 }
 
@@ -528,13 +527,13 @@ Possible responses:
 
 {
 
-"status": "NEEDS_CLARIFICATION",
-
-"missing_fields": [
-
-{ "field": "use_case", "question": "¿Para qué la vas a usar? (oficina, diseño...)" }
-
-]
+	"status": "NEEDS_CLARIFICATION",
+	
+	"missing_fields": [
+	
+	{ "field": "use_case", "question": "¿Para qué la vas a usar? (oficina, diseño...)" }
+	
+	]
 
 }
 
@@ -549,31 +548,31 @@ Frontend: show these exact `question`s, collect answers, merge them into `extra_
 
 {
 
-"status": "OK",
-
-"results_for_user": [
-
-{
-
-"product_title": "HP Envy Ryzen 7 16GB RAM 512GB SSD 15.6\"",
-
-"price_total_gtq": 6200.00,
-
-"seller_name": "ElectroCentro Guatemala",
-
-"url": "https://electrocentro.gt/hp-envy-ryzen7",
-
-"pickup_available": true,
-
-"warranty_info": "Garantía HP 12 meses",
-
-"copy_for_user": "Opción recomendada para diseño gráfico. Buen rendimiento con Ryzen 7 y 16GB RAM. Está alrededor de Q100 más barata que otras opciones similares.",
-
-"badges": ["Más barata", "Pantalla antirreflejo", "Garantía 12 meses"]
-
-}
-
-]
+	"status": "OK",
+	
+	"results_for_user": [
+	
+	{
+	
+		"product_title": "HP Envy Ryzen 7 16GB RAM 512GB SSD 15.6\"",
+		
+		"price_total_gtq": 6200.00,
+		
+		"seller_name": "ElectroCentro Guatemala",
+		
+		"url": "https://electrocentro.gt/hp-envy-ryzen7",
+		
+		"pickup_available": true,
+		
+		"warranty_info": "Garantía HP 12 meses",
+		
+		"copy_for_user": "Opción recomendada para diseño gráfico. Buen rendimiento con Ryzen 7 y 16GB RAM. Está alrededor de Q100 más barata que otras opciones similares.",
+		
+		"badges": ["Más barata", "Pantalla antirreflejo", "Garantía 12 meses"]
+	
+	}
+	
+	]
 
 }
 
@@ -623,7 +622,7 @@ Purpose: check which budgets are close to being exceeded.
 ## 10. Security / RLS expectations
 
 * Every request runs as the currently authenticated user (token in `Authorization` header).
-* Row-Level Security in Supabase enforces `user_id = auth.uid()` for all user-owned rows (`account`, `transaction`, `invoice`, `invoice_item`, `budget`, `recurring_transaction`, `wishlist_item`, etc.).
+* Row-Level Security in Supabase enforces `user_id = auth.uid()` for all user-owned rows (`account`, `transaction`, `invoice`, `budget`, `recurring_transaction`, `wishlist_item`, etc.).
 * Global rows (example: global categories) are readable but not editable by normal users.
 
 The backend is responsible for:
