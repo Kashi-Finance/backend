@@ -165,8 +165,10 @@ Purpose: insert a transaction manually (not from OCR, not from an automation rul
 * `amount`
 * `date` (TIMESTAMPTZ)
 * `description`
-* `category_id` (nullable)
+* `category_id` 
 * Returns: created transaction object (including `paired_transaction_id` if this was created as part of a transfer helper flow).
+
+`category_id` is required. If the user doesn't pick one in UI, the app should send the default "General" category ID.
 
 ### `PATCH /transactions/{transaction_id}`
 
@@ -402,7 +404,7 @@ Important:
 Typical fields of a recurring rule:
 * `id`
 * `account_id`
-* `category_id` (nullable)
+* `category_id`
 * `flow_type` (`income` / `outcome`)
 * `amount`
 * `description`
@@ -444,41 +446,198 @@ Purpose: remove that automation rule.
 
 ## 7. Wishlist / Goals / Recommendations integration
 
-`/wishlist` in the API corresponds to physical rows in the `wishlist_item` (or similar) table in the DB.
+### Hierarchy
 
-Wishlist = what the user *wants* to buy. Recommendation Agent helps fill it.
+- `wishlist` **(Parent)** — represents the user goal or intention (e.g., _"I want a laptop for Photoshop, not gamer"_).
+    
+- `wishlist_item` **(Child)** — represents specific recommended options that the user decided to save from the Recommendation Agent results.
 
-### `GET /wishlist`
+### `GET /wishlists`
 
-Purpose: list wishlist items (goals) for the current user.
-* Each item:
-	* `id`
-	* `item_name`
-	* `target_price`
-	* `notes` (user notes, preference like "nada gamer con luces RGB")
-	* `url` (seller link / reference)
-	* `status` (`planned`, `purchased`, `abandoned`)
-	* `target_date`
-	* timestamps
+**Description:** Returns all saved wishlists (goals) for the authenticated user.
 
-### `POST /wishlist`
+**Response Example:**
 
-Purpose: create a wishlist item / savings goal.
-* Body:
-* `item_name`
-* `target_price`
-* `notes`
-* `target_date` (optional)
-* Returns: created wishlist row.
-* Typical usage: user says "guarda esta laptop recomendada".
-
-### `PATCH /wishlist/{wishlist_id}`
-
-Purpose: update fields like `status` → `purchased`, adjust `target_price`, etc.
+```json
+[
+  {
+    "id": "f3d3b64c-79e4-4e29-bb2c-41b09e7ac8c1",
+    "goal_title": "Laptop for Photoshop (non-gamer)",
+    "budget_hint": 7000,
+    "currency_code": "GTQ",
+    "target_date": "2025-12-01",
+    "preferred_store": "Intelaf",
+    "user_note": "No RGB lights, quiet keyboard",
+    "status": "active",
+    "created_at": "2025-10-30T10:25:43.225Z",
+    "updated_at": "2025-10-30T10:25:43.225Z"
+  }
+]
+```
 
 ---
 
-## 8. Recommendation Agent Entry Point
+### `POST /wishlists`
+
+**Description:** Creates a new wishlist goal for the user.
+
+**Request Body:**
+
+```json
+{
+  "goal_title": "Laptop for Photoshop",
+  "budget_hint": 7000,
+  "currency_code": "GTQ",
+  "target_date": "2025-12-01",
+  "preferred_store": "Intelaf",
+  "user_note": "Not gamer style",
+  "status": "active"
+}
+```
+
+**Response:**
+
+```json
+{
+  "id": "f3d3b64c-79e4-4e29-bb2c-41b09e7ac8c1",
+  "goal_title": "Laptop for Photoshop",
+  "budget_hint": 7000,
+  "currency_code": "GTQ",
+  "target_date": "2025-12-01",
+  "preferred_store": "Intelaf",
+  "user_note": "Not gamer style",
+  "status": "active",
+  "created_at": "2025-10-30T10:25:43.225Z"
+}
+```
+
+---
+
+### `PATCH /wishlists/{wishlist_id}`
+
+**Description:** Updates an existing wishlist goal (e.g., marking it as completed or changing the target date).
+
+**Request Example:**
+
+```json
+{
+  "status": "purchased",
+  "target_date": "2025-12-31"
+}
+```
+
+**Response:**
+
+```json
+{
+  "id": "f3d3b64c-79e4-4e29-bb2c-41b09e7ac8c1",
+  "status": "purchased",
+  "target_date": "2025-12-31",
+  "updated_at": "2025-10-31T14:05:11.893Z"
+}
+```
+
+---
+
+### `DELETE /wishlists/{wishlist_id}`
+
+**Description:** Deletes a wishlist and all its related items.
+
+**Delete Rule:** When a wishlist is deleted, **all related wishlist\_item rows must be deleted automatically** (`ON DELETE CASCADE`).
+
+**Response:**
+
+```json
+{ "message": "Wishlist and related items deleted successfully." }
+```
+
+---
+
+## 8. `wishlist_item` Endpoints (Saved Recommendations)
+
+### `GET /wishlists/{wishlist_id}/items`
+
+**Description:** Returns all saved items within a specific wishlist.
+
+**Response Example:**
+
+```json
+[
+  {
+    "id": "24b2e91b-ec1a-4c94-9d1f-ded17b861c74",
+    "wishlist_id": "f3d3b64c-79e4-4e29-bb2c-41b09e7ac8c1",
+    "product_title": "ASUS VivoBook Ryzen 7",
+    "price_total": 6750,
+    "seller_name": "TecnoMundo",
+    "url": "https://tecnomundo.gt/asus-vivobook",
+    "pickup_available": true,
+    "warranty_info": "12 months",
+    "copy_for_user": "Great performance for Photoshop, below budget.",
+    "badges": ["Best Price", "Warranty 12m"],
+    "created_at": "2025-10-30T11:03:21.446Z"
+  }
+]
+```
+
+---
+
+### `POST /wishlists/{wishlist_id}/items`
+
+**Description:** Adds a new recommended item to an existing wishlist.
+
+**Request Example:**
+
+```json
+{
+  "product_title": "ASUS VivoBook Ryzen 7",
+  "price_total": 6750,
+  "seller_name": "TecnoMundo",
+  "url": "https://tecnomundo.gt/asus-vivobook",
+  "pickup_available": true,
+  "warranty_info": "12 months",
+  "copy_for_user": "Recommended by AI agent.",
+  "badges": ["Best Value", "Trusted Store"]
+}
+```
+
+**Response:**
+
+```json
+{
+  "id": "...",
+  "wishlist_id": "...",
+  "product_title": "ASUS VivoBook Ryzen 7",
+  "price_total": 6750,
+  "seller_name": "TecnoMundo",
+  "url": "https://tecnomundo.gt/asus-vivobook",
+  "pickup_available": true,
+  "warranty_info": "12 months",
+  "copy_for_user": "Recommended by AI agent.",
+  "badges": ["Best Value", "Trusted Store"],
+  "created_at": "2025-10-30T11:03:21.446Z"
+}
+```
+
+---
+
+### `DELETE /wishlists/{wishlist_id}/items/{item_id}`
+
+**Description:** Deletes a specific saved recommendation from the user wishlist.
+
+**Delete Rule:** When a wishlist\_item is deleted, **only that item is removed**. The parent wishlist remains intact.
+
+**Response:**
+
+```json
+{ "message": "Wishlist item deleted successfully." }
+```
+
+
+
+
+---
+
+## 9. Recommendation Agent Entry Point
 
 Single public entry for all product suggestions / purchase guidance. The frontend NEVER calls subagents directly.
 
@@ -556,7 +715,7 @@ Frontend: show these exact `question`s, collect answers, merge them into `extra_
 	
 		"product_title": "HP Envy Ryzen 7 16GB RAM 512GB SSD 15.6\"",
 		
-		"price_total_gtq": 6200.00,
+		"price_total": 6200.00,
 		
 		"seller_name": "ElectroCentro Guatemala",
 		
@@ -580,7 +739,8 @@ Frontend: show these exact `question`s, collect answers, merge them into `extra_
 
 Rules for frontend:
 * Render cards exactly in this order. Do not reorder. Do not rewrite `copy_for_user`.
-* Ofrezca CTA "Guardar en mi wishlist" que hace `POST /wishlist` usando estos datos.
+* Si el usuario no tiene aún una wishlist para esta meta, crearla con `POST /wishlists` y luego guardar la opción con `POST /wishlists/{wishlist_id}/items`. Si ya existe, saltar directo al POST de `items`
+* If the user doesn't have a wishlist for this goal yet, create it using `POST /wishlists` then store the option using `POST /wishlists/{wishlist_id}/items`. If already exists, do the POST `items`
   
 
 **C. status = "NO_VALID_OPTION"**
@@ -602,7 +762,7 @@ Meaning:
 
 ---
 
-## 9. Insights / Analytics (future)
+## 10. Insights / Analytics (future)
 
 These endpoints are CALCULATED VIEWS, not direct tables. They read from `transaction`, `budget`, and related joins.
 They are reserved for post-Beta reporting screens.
@@ -619,7 +779,7 @@ Purpose: check which budgets are close to being exceeded.
 * Returns a list of budgets + usage %.
 
 ---
-## 10. Security / RLS expectations
+## 11. Security / RLS expectations
 
 * Every request runs as the currently authenticated user (token in `Authorization` header).
 * Row-Level Security in Supabase enforces `user_id = auth.uid()` for all user-owned rows (`account`, `transaction`, `invoice`, `budget`, `recurring_transaction`, `wishlist_item`, etc.).
@@ -632,7 +792,7 @@ The backend is responsible for:
 
 ---
 
-## 11. Summary checklist for frontend devs
+## 12. Summary checklist for frontend devs
 
 Boot / session:
 * Read saved token from secure storage.
@@ -647,7 +807,7 @@ Invoice flow:
 Wishlist / metas / compras:
 * User writes goal or taps "dame opciones" → `POST /recommendations/query`.
 * Show `NEEDS_CLARIFICATION` Q&A loop OR show ranked `OK` cards.
-* Allow "Guardar en mi wishlist" → `POST /wishlist`.
+* Allow "Guardar en mi wishlist" could be `POST /wishlists` + `POST /wishlists/{wishlist_id}/items` or a direct `POST /wishlists/{wishlist_id}/items` if the goal already exists.
 
 Budgets & suscripciones:
 * `/budgets` for spending caps (frequency can be `once`).
