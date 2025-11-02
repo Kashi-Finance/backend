@@ -21,6 +21,15 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+      
+      - name: Safety check
+        run: |
+          echo "Last commit message:"
+          git log -1 --pretty=%s
+          if ! git log -1 --pretty=%s | grep -qi "merge pull request"; then
+            echo "Direct push detected. Production deploy blocked."
+            exit 1
+          fi
 
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v1
