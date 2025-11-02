@@ -27,8 +27,11 @@ jobs:
         with:
           version: latest
 
+      - name: Authenticate Supabase CLI
+        run: supabase login --token $SUPABASE_ACCESS_TOKEN
+    
       - name: Link to Supabase Production project
-        run: supabase link --project-ref $SUPABASE_PROJECT_ID --password $SUPABASE_DB_PASSWORD --access-token $SUPABASE_ACCESS_TOKEN
-
+        run: supabase link --project-ref $SUPABASE_PROJECT_ID --password $SUPABASE_DB_PASSWORD
+      
       - name: Push DB schema/state to Production
-        run: supabase db push --password $SUPABASE_DB_PASSWORD --access-token $SUPABASE_ACCESS_TOKEN
+        run: supabase db push --password $SUPABASE_DB_PASSWORD
