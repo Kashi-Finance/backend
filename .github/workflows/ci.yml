@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+      - "feature/*"
+  pull_request:
+    branches:
+      - develop
+      - main
+  workflow_dispatch:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python (for backend tests / linters)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend deps
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start local Supabase stack (Postgres + services)
+        run: supabase db start
+
+      - name: Verify generated DB types are committed
+        run: |
+          supabase db diff --local > schema_diff.sql || true
+          if [ -s schema_diff.sql ]; then
+            echo "Database schema differences detected! Please update your Supabase project or local schema."
+            cat schema_diff.sql
+            exit 1
+          else
+            echo "Database schema is up to date."
+          fi
+
+      - name: Run backend tests
+        run: |
+          if [ -d tests ]; then
+            pytest -q
+          else
+            echo "No tests/ directory found, skipping pytest."
+          fi
