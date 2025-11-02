@@ -27,7 +27,7 @@ jobs:
           echo "Last commit message:"
           git log -1 --pretty=%s
           if ! git log -1 --pretty=%s | grep -qi "merge pull request"; then
-            echo "Direct push detected. Production deploy blocked."
+            echo "Direct push detected. Please use a pull request to deploy to production."
             exit 1
           fi
 
