@@ -134,23 +134,167 @@ Always use enum values as defined; never invent new string literals.
 
 ---
 
-## 8. Addendum — JWT & Key System Update
+## 8. API Keys System (Publishable and Secret Keys)
 
-* Supabase now uses the **new JWT Signing Keys system** with ECC (P-256) asymmetric signing. The legacy HS256 shared secret is deprecated and no longer used.
+### 8.1. Modern API Key Types
 
-* All token validation must rely on the **current public key** (ES256 algorithm) obtained from Supabase, not the old `SUPABASE_JWT_SECRET`.
+Supabase provides **four types of API keys**, but only the first two should be used in new code:
 
-* Copilot must assume that all API authentication and RLS enforcement rely on **user tokens signed by Supabase Auth** under this new key system.
+1. **Publishable Key** (`sb_publishable_...`)
+   - **Purpose**: Low-privilege key safe to expose in client-side code
+   - **Replaces**: Legacy `anon` JWT key
+   - **Behavior**: Identical to `anon` key — respects RLS, works with `auth.uid()`
+   - **Rotation**: Can be rotated independently without affecting JWT signing keys
+   - **Use case**: All client-side and server-side operations that require RLS enforcement
 
-* The backend validates these tokens using the **public key**, while Supabase continues issuing them using its private key.
+2. **Secret Key** (`sb_secret_...`)
+   - **Purpose**: Elevated privileges, server-only, bypasses RLS
+   - **Replaces**: Legacy `service_role` JWT key
+   - **Behavior**: Identical to `service_role` — bypasses RLS, has full database access
+   - **Security**: Never expose in client code or version control
+   - **Use case**: Administrative operations that need to bypass RLS (NOT used in this project)
 
-* Do not reference or use the old `anon` and `service_role` keys; when necessary, prefer the new **`publishable`** and **`secret`** keys for controlled client and server operations.
+3. **anon** (Legacy JWT long-lived)
+   - **Status**: DEPRECATED — do not use in new code
+   - **Problem**: Tied to JWT secret rotation, causes production downtime
+   - **Migration**: Replace with `publishable` key
 
-* Always follow the latest Supabase documentation regarding JWT key rotation and validation.
+4. **service_role** (Legacy JWT long-lived)
+   - **Status**: DEPRECATED — do not use in new code
+   - **Problem**: Tied to JWT secret rotation, 10-year expiry is a security risk
+   - **Migration**: Replace with `secret` key (if needed)
+
+### 8.2. Why Legacy Keys Are Deprecated
+
+Legacy `anon` and `service_role` keys have critical flaws:
+
+- **Tight Coupling**: Bound to JWT secret; rotating JWT secret forces key rotation
+- **Downtime Risk**: Mobile apps can't update instantly; forced rotation = weeks of downtime
+- **Security Concerns**: 10-year JWT expiry, symmetric signing (HS256)
+- **Inflexibility**: Can't independently rotate keys without affecting all JWTs
+
+New keys solve these problems:
+
+- **Independent Rotation**: Change keys without affecting JWT signing
+- **Rollback Support**: Can revert problematic key rotations
+- **Short-Lived**: API Gateway mints temporary JWTs internally
+- **Asymmetric**: ES256 signing with better security properties
+
+### 8.3. How Publishable Keys Work
+
+When you use a publishable key:
+
+1. **Request**: Client sends `apikey: sb_publishable_...` header
+2. **API Gateway**: Verifies publishable key validity
+3. **JWT Minting**: Gateway creates a short-lived JWT with `anon` role
+4. **Forwarding**: JWT is sent to Postgres with the request
+5. **RLS**: Postgres enforces RLS policies using `auth.uid()` from user's access token
+6. **Response**: Data filtered by RLS is returned
+
+**Important**: The publishable key does NOT replace the user's access token (JWT). Users still authenticate with Supabase Auth and get a JWT. The publishable key just authenticates the *client application*, not the *user*.
+
+### 8.4. Using Keys in Python (supabase-py)
+
+```python
+import os
+from supabase import create_client, Client
+
+# ✅ CORRECT: Use publishable key
+url: str = os.environ.get("SUPABASE_URL")
+key: str = os.environ.get("SUPABASE_PUBLISHABLE_KEY")  # or SUPABASE_KEY
+supabase: Client = create_client(url, key)
+
+# ❌ WRONG: Don't use these deprecated names
+# SUPABASE_ANON_KEY (legacy)
+# SUPABASE_SERVICE_ROLE_KEY (legacy)
+```
+
+The key passed to `create_client()` can be either:
+- A publishable key (`sb_publishable_...`) for RLS-protected operations
+- A secret key (`sb_secret_...`) for admin operations that bypass RLS (not used in this project)
+
+### 8.5. Important Limitations
+
+**Cannot Use in Authorization Header**:
+```python
+# ❌ WRONG: Publishable/secret keys don't work in Authorization header
+headers = {
+    "Authorization": f"Bearer {publishable_key}"  # Will fail!
+}
+
+# ✅ CORRECT: User access tokens (JWTs) go in Authorization header
+headers = {
+    "Authorization": f"Bearer {user_access_token}"  # JWT from Supabase Auth
+}
+```
+
+**Edge Functions**:
+- If using Supabase Edge Functions with new keys, you may need `--no-verify-jwt` flag
+- See Supabase docs for Edge Function configuration with new key system
+
+### 8.6. Migration Path from Legacy Keys
+
+For existing code using `SUPABASE_ANON_KEY`:
+
+1. **Update Environment Variable**:
+   ```bash
+   # .env
+   - SUPABASE_ANON_KEY=eyJhbG...  # Remove this
+   + SUPABASE_PUBLISHABLE_KEY=sb_publishable_...  # Add this
+   ```
+
+2. **Update Configuration**:
+   ```python
+   # backend/config.py
+   - SUPABASE_ANON_KEY: str = Field(...)
+   + SUPABASE_PUBLISHABLE_KEY: str = Field(...)
+   ```
+
+3. **Update Client Creation**:
+   ```python
+   # backend/db/client.py
+   - supabase_key=settings.SUPABASE_ANON_KEY
+   + supabase_key=settings.SUPABASE_PUBLISHABLE_KEY
+   ```
+
+4. **Behavior**: No code changes needed! Publishable key works identically to anon key:
+   - RLS still enforced
+   - `auth.uid()` still works
+   - User access tokens still required for authentication
+
+### 8.7. JWT & Key System Summary
+
+* Supabase uses **JWT Signing Keys** (ECC P-256 asymmetric signing) for user authentication
+* User JWTs are validated using ES256 algorithm with public keys from `/.well-known/jwks.json`
+* The old HS256 shared secret (`SUPABASE_JWT_SECRET`) is deprecated
+
+**Two Separate Concepts**:
+1. **User Authentication** (JWT Signing Keys): How users prove their identity
+   - Users get JWTs from Supabase Auth (`sign_in_with_password`, `sign_up`, etc.)
+   - Backend validates JWTs using public key (ES256)
+   - JWT contains `user_id` used for RLS (`auth.uid()`)
+
+2. **Application Authentication** (Publishable/Secret Keys): How the app authenticates to Supabase
+   - App uses publishable key to make requests on behalf of users
+   - Publishable key + user JWT = RLS-protected data access
+   - Secret key = bypass RLS (admin operations)
 
 ---
 
-## 9. Summary
+## 9. Mandatory Rules for Kashi Finances Backend
+
+For this project, you MUST:
+
+1. **Always use `SUPABASE_PUBLISHABLE_KEY`** in `create_client()`
+2. **Never use `SUPABASE_ANON_KEY`** or `SUPABASE_SERVICE_ROLE_KEY`
+3. **Verify user JWTs** using ES256 with JWKS endpoint
+4. **Rely on RLS** for all data access control
+5. **Pass user access token** when creating authenticated Supabase clients
+6. **Never bypass RLS** in application code (we don't use secret keys)
+
+---
+
+## 10. Summary
 
 * Supabase is the **source of truth** for schema and data structure.
 * Use MCP in **read-only mode** to inspect schema, not to modify or view real data.
@@ -158,5 +302,15 @@ Always use enum values as defined; never invent new string literals.
 * All schema changes must go through **migrations** under CI/CD.
 * Never suggest disabling or bypassing security features.
 * Never reveal production data, tokens, or secrets.
+* **Always use `SUPABASE_PUBLISHABLE_KEY`** instead of deprecated `SUPABASE_ANON_KEY`.
+* **User JWTs** are validated using ES256/JWKS, not the old HS256 shared secret.
 
 When uncertain, always prioritize **data safety**, **auth integrity**, and **schema consistency**.
+
+---
+
+## References
+
+- [Supabase API Keys Documentation](https://supabase.com/docs/guides/api/api-keys)
+- [Supabase JWT Signing Keys Guide](https://supabase.com/docs/guides/auth/signing-keys)
+- [Supabase Python Client Reference](https://supabase.com/docs/reference/python/initializing)

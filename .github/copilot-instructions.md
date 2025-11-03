@@ -56,7 +56,14 @@ No request should ever invoke an adk agent if step 1-4 above did not fully pass,
 
 The authentication rules and which routes are public vs protected are defined in the endpoint documentation. Obey them exactly.
 
-Refer to .github/instructions/supabase.instructions.md for detailed rules on Supabase Auth and Row Level Security (RLS).
+**IMPORTANT**: When integrating with Supabase (authentication, database, storage, etc.), **always** refer to `.github/instructions/supabase.instructions.md` for the authoritative rules on:
+- API key usage (publishable vs secret keys)
+- JWT validation and signing keys
+- RLS policies and security
+- Schema management and migrations
+- Best practices and safety guidelines
+
+Never use deprecated `SUPABASE_ANON_KEY` or `SUPABASE_SERVICE_ROLE_KEY`. Always use `SUPABASE_PUBLISHABLE_KEY` for client initialization.
 
 
 ## 4. Endpoint Behavior Requirements
