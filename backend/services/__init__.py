@@ -8,7 +8,20 @@ Contains business logic orchestration that:
 - Handles persistence coordination (calling DB layer under RLS)
 
 Services act as the glue between routes (HTTP layer) and agents/database.
-
-TODO: Add service modules as features are implemented (invoice_service.py, 
-      recommendation_service.py, etc.)
 """
+
+from .invoice_service import create_invoice, get_user_invoices, format_extracted_text
+from .profile_service import (
+    get_user_profile,
+    create_user_profile,
+    update_user_profile
+)
+
+__all__ = [
+    "create_invoice",
+    "get_user_invoices",
+    "format_extracted_text",
+    "get_user_profile",
+    "create_user_profile",
+    "update_user_profile",
+]
