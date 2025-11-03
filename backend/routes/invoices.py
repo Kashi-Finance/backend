@@ -58,7 +58,7 @@ router = APIRouter(prefix="/invoices", tags=["invoices"])
 )
 async def process_invoice_ocr(
     image: Annotated[UploadFile, File(description="Receipt/invoice image file")],
-    user_id: Annotated[str, Depends(verify_token)]
+    auth_user: Annotated[AuthenticatedUser, Depends(get_authenticated_user)]
 ) -> InvoiceOCRResponse:
     """
     Process receipt image and extract structured invoice data.
@@ -66,8 +66,8 @@ async def process_invoice_ocr(
     **6-STEP ENDPOINT FLOW:**
     
     Step 1: Auth
-    - Handled by verify_token dependency
-    - Extracts user_id from Supabase Auth token
+    - Handled by get_authenticated_user dependency
+    - Extracts user_id and access_token from Supabase Auth token
     
     Step 2: Parse/Validate Request
     - FastAPI validates UploadFile automatically
@@ -89,6 +89,8 @@ async def process_invoice_ocr(
     - NONE - this endpoint is preview only
     - Actual persistence happens in /invoices/commit
     """
+    
+    user_id = auth_user.user_id
     
     # --- STEP 3: Domain & Intent Filter ---
     
@@ -144,10 +146,31 @@ async def process_invoice_ocr(
     # TODO(storage-team): Upload image to Supabase Storage and get real receipt_id
     receipt_image_id = f"temp-{user_id[:8]}-{hash(image_bytes) % 10000}"
     
-    # TODO(db-team): Fetch user profile for country and currency_preference
-    # For now, use defaults
-    country = "GT"
-    currency_preference = "GTQ"
+    # Create authenticated Supabase client for fetching user profile
+    # This client respects RLS and can only access the user's own data
+    supabase_client = get_supabase_client(auth_user.access_token)
+    
+    # Fetch user profile for country and currency_preference
+    # This allows the InvoiceAgent to provide localized extraction
+    # (e.g. recognize GTQ for Guatemala, MXN for Mexico, etc.)
+    profile = await get_user_profile(supabase_client=supabase_client, user_id=user_id)
+    
+    if profile:
+        country = profile.get("country", "GT")
+        currency_preference = profile.get("currency_preference", "GTQ")
+        logger.debug(
+            f"Using profile settings for user {user_id}: "
+            f"country={country}, currency={currency_preference}"
+        )
+    else:
+        # Profile not found - use sensible defaults for Guatemala
+        # In production, you might want to create a profile here or return an error
+        country = "GT"
+        currency_preference = "GTQ"
+        logger.warning(
+            f"Profile not found for user {user_id}, using defaults: "
+            f"country={country}, currency={currency_preference}"
+        )
     
     try:
         agent_output = run_invoice_agent(
