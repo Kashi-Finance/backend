@@ -13,6 +13,6 @@ os.environ["VALIDATE_CONFIG"] = "false"
 # Set test environment variables
 os.environ.setdefault("ENVIRONMENT", "testing")
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
-os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
+os.environ.setdefault("SUPABASE_PUBLISHABLE_KEY", "test-publishable-key")
 # Note: SUPABASE_JWT_SECRET no longer needed - we use JWKS (ES256) now
 os.environ.setdefault("GOOGLE_API_KEY", "test-google-api-key")
