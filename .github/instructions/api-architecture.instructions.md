@@ -142,7 +142,7 @@ That row includes a column `extracted_text`. Its value MUST always follow this c
     Currency: {currency}
     Purchased Items:
     {purchased_items}
-    Receipt Image ID: {receipt_id}
+    NIT: {nit}
     """
 
 Rules:

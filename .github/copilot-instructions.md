@@ -56,6 +56,8 @@ No request should ever invoke an adk agent if step 1-4 above did not fully pass,
 
 The authentication rules and which routes are public vs protected are defined in the endpoint documentation. Obey them exactly.
 
+Refer to .github/instructions/supabase.instructions.md for detailed rules on Supabase Auth and Row Level Security (RLS).
+
 
 ## 4. Endpoint Behavior Requirements
 
@@ -129,6 +131,80 @@ Never bypass RLS. Assume every row is protected by `user_id = auth.uid()`.
 - Keep functions short, single-responsibility.
 - Follow the 6-step endpoint flow in section 4 every time.
 - All new code MUST be compatible with Docker-based local execution.
+
+
+## 8. Testing / CI Expectations
+
+All new backend code (routes, services, auth helpers, and adk agent wrappers) MUST include or update **pytest tests** under the `tests/` folder. The CI workflow executes pytest automatically, and missing or failing tests will block merges.
+
+### CI Workflow Context
+
+The GitHub Actions pipeline executes the following steps:
+
+```bash
+pip install -r requirements.txt
+supabase db start  # local Postgres + Supabase stack
+pytest -q
+```
+
+If the `tests/` folder exists, pytest must pass. If it doesn't exist, CI will skip tests (but this is not desired long term).
+
+### General Testing Rules
+
+* Place all tests under `tests/` with clear module structure mirroring `backend/`.
+* Each new FastAPI endpoint must have corresponding tests that use `TestClient`.
+* Include realistic but **mocked** data for ADK agent interactions.
+* Use **mocking** for all external dependencies:
+
+  * No real Gemini or Supabase Cloud calls.
+  * Mock Supabase Auth validation (simulate valid `user_id`).
+  * For DB access, test the logic layer only or use existing local fixtures.
+
+### Required Tests Per Endpoint
+
+Each new endpoint must include:
+
+1. **Happy Path Test**
+
+   * Valid `Authorization: Bearer <fake>` header.
+   * Request body conforms to `RequestModel`.
+   * Response conforms to `ResponseModel` (validated by `response_model=...`).
+
+2. **Failure Path Tests**
+
+   * Invalid or missing token → Expect `401 Unauthorized`.
+   * Out-of-scope request → Expect `400 Bad Request` with `{"error": "out_of_scope"}`.
+
+3. **Validation Tests**
+
+   * Invalid request data must raise validation errors via Pydantic.
+
+### Pydantic Schema Testing
+
+For each new or modified schema in `backend/schemas/`:
+
+* Add a test validating `.model_validate({...})` with sample data.
+* Add negative tests for missing/invalid fields.
+
+### Logging and Side Effects
+
+* Tests must not log or store sensitive financial data.
+* Never connect to production Supabase or external APIs.
+
+### Prohibited Practices
+
+* Do not invent schema or DB logic in tests (reference `backend/db.instructions.md`).
+* Do not use hardcoded credentials or production URLs.
+
+### Summary for Copilot
+
+When generating or updating code:
+
+* **Always** create or update pytest tests under `tests/` for each new module or endpoint.
+* Ensure tests import code with absolute imports (e.g. `from backend.routes.x import router`).
+* CI expects `pytest` to run cleanly on Docker-based local execution.
+* Keep all tests deterministic and network-free.
+
 
 Do not produce UI code here.
 Do not produce deployment scripts here.

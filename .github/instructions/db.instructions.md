@@ -7,6 +7,8 @@ This file is the ONLY place where database behavior, table structures, queries, 
 
 Application code MUST treat this file as the source of truth. Do not invent schemas or SQL in other files.
 
+Always refer to DATABASE-DDL.md for the actual DDL statements to create tables, indexes, and RLS policies.
+
 
 ## 1. Ownership
 
@@ -33,7 +35,7 @@ When inserting or updating a record in the `invoice` table, the `extracted_text`
     Currency: {currency}
     Purchased Items:
     {purchased_items}
-    Receipt Image ID: {receipt_id}
+    NIT: {nit}
     """
 
 Where:
@@ -42,7 +44,7 @@ Where:
 - `total_amount`: numeric rendered as string (e.g. "123.45").
 - `currency`: currency code / symbol (e.g. "GTQ").
 - `purchased_items`: multi-line list of the items with quantity and price.
-- `receipt_id`: internal reference to the stored receipt image.
+ - `nit`: taxpayer identification number (NIT) or other receipt identifier associated with the merchant/receipt. Render as a string.
 
 Any service that prepares an insert into `invoice` MUST normalize text to this exact template before persistence. This ensures a consistent snapshot for audit and review.
 
