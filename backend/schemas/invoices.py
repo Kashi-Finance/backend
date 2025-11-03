@@ -113,3 +113,42 @@ class InvoiceOCRResponseDraft(BaseModel):
 # --- Union type for response ---
 
 InvoiceOCRResponse = InvoiceOCRResponseDraft | InvoiceOCRResponseInvalid
+
+
+# --- Commit endpoint models ---
+
+class InvoiceCommitRequest(BaseModel):
+    """
+    Request to commit (persist) an invoice after OCR and user confirmation.
+    
+    The frontend sends the edited/confirmed data from the DRAFT response.
+    """
+    store_name: str = Field(..., description="Merchant/store name")
+    transaction_time: str = Field(..., description="ISO-8601 datetime of purchase")
+    total_amount: str = Field(..., description="Total amount as string (e.g., '128.50')")
+    currency: str = Field(..., description="Currency code (e.g., 'GTQ')")
+    purchased_items: str = Field(
+        ...,
+        description="Formatted multi-line list of purchased items"
+    )
+    nit: str = Field(..., description="NIT or taxpayer identification number")
+    storage_path: str = Field(
+        ...,
+        description="Path to receipt image in Supabase Storage"
+    )
+
+
+class InvoiceCommitResponse(BaseModel):
+    """
+    Response after successfully persisting an invoice.
+    """
+    status: Literal["COMMITTED"] = Field(
+        "COMMITTED",
+        description="Indicates the invoice was successfully saved"
+    )
+    invoice_id: str = Field(..., description="UUID of created invoice record")
+    message: str = Field(
+        ...,
+        description="Success message",
+        examples=["Invoice saved successfully"]
+    )

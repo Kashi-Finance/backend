@@ -5,7 +5,7 @@ Provides endpoints for uploading and processing receipt images using InvoiceAgen
 
 Flow:
 1. POST /invoices/ocr - Upload image, get draft extraction (PREVIEW ONLY, not persisted)
-2. POST /invoices/commit - Confirm/edit draft and persist to DB (NOT IMPLEMENTED YET)
+2. POST /invoices/commit - Confirm/edit draft and persist to DB
 """
 
 import base64
@@ -13,11 +13,15 @@ import logging
 from typing import Annotated
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
-from backend.auth.dependencies import verify_token
+from backend.auth.dependencies import verify_token, get_authenticated_user, AuthenticatedUser
+from backend.db.client import get_supabase_client
+from backend.services import create_invoice, get_user_profile, format_extracted_text
 from backend.schemas.invoices import (
     InvoiceOCRResponse,
     InvoiceOCRResponseDraft,
     InvoiceOCRResponseInvalid,
+    InvoiceCommitRequest,
+    InvoiceCommitResponse,
     PurchasedItemResponse,
     CategorySuggestionResponse,
 )
@@ -276,10 +280,131 @@ async def process_invoice_ocr(
         )
 
 
-# TODO: Implement POST /invoices/commit
-# This endpoint will:
-# 1. Accept edited draft data from frontend
-# 2. Upload receipt image to Supabase Storage (if not already uploaded)
-# 3. Insert row into invoice table
-# 4. Insert row into transaction table
-# 5. Return { "status": "COMMITTED", "transaction_id": "...", "invoice_id": "..." }
+@router.post(
+    "/commit",
+    response_model=InvoiceCommitResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Commit invoice to database",
+    description="""
+    Persist confirmed invoice data to the database.
+    
+    This endpoint:
+    - Accepts edited/confirmed data from the frontend
+    - Formats data into the canonical EXTRACTED_INVOICE_TEXT_FORMAT
+    - Inserts record into the invoice table with RLS enforcement
+    - Returns the created invoice ID
+    
+    Security:
+    - Requires valid Authorization Bearer token
+    - RLS ensures user can only create invoices for themselves
+    - The invoice.extracted_text field follows the canonical format
+    """
+)
+async def commit_invoice(
+    request: InvoiceCommitRequest,
+    auth_user: Annotated[AuthenticatedUser, Depends(get_authenticated_user)]
+) -> InvoiceCommitResponse:
+    """
+    Persist invoice data to Supabase with RLS enforcement.
+    
+    **6-STEP ENDPOINT FLOW:**
+    
+    Step 1: Auth
+    - Handled by get_authenticated_user dependency
+    - Extracts user_id and access_token from Supabase Auth
+    
+    Step 2: Parse/Validate Request
+    - FastAPI validates InvoiceCommitRequest automatically
+    - Ensures all required fields are present
+    
+    Step 3: Domain & Intent Filter
+    - Validate that this is a valid invoice commit request
+    - Check that required fields are non-empty
+
+    Step 4: Call ADK Agent
+    - No agent needed for commit (data already extracted)
+
+    Step 5: Map Output -> ResponseModel
+    - Return InvoiceCommitResponse with invoice_id
+
+    Step 6: Persistence
+    - Create authenticated Supabase client
+    - Call invoice_service.create_invoice()
+    - RLS automatically enforces user_id = auth.uid()
+    """
+    
+    # --- STEP 3: Domain & Intent Filter ---
+    
+    # Basic validation (Pydantic already enforces non-null)
+    if not request.store_name.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "invalid_request",
+                "details": "store_name cannot be empty"
+            }
+        )
+    
+    if not request.storage_path.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "invalid_request",
+                "details": "storage_path cannot be empty"
+            }
+        )
+    
+    logger.info(
+        f"Committing invoice for user_id={auth_user.user_id}, "
+        f"store={request.store_name}, "
+        f"amount={request.total_amount} {request.currency}"
+    )
+    
+    # --- STEP 6: Persistence ---
+    
+    # Create authenticated Supabase client (RLS enforced)
+    supabase_client = get_supabase_client(auth_user.access_token)
+    
+    try:
+        # Persist invoice to database
+        created_invoice = await create_invoice(
+            supabase_client=supabase_client,
+            user_id=auth_user.user_id,
+            storage_path=request.storage_path,
+            store_name=request.store_name,
+            transaction_time=request.transaction_time,
+            total_amount=request.total_amount,
+            currency=request.currency,
+            purchased_items=request.purchased_items,
+            nit=request.nit
+        )
+        
+        invoice_id = created_invoice.get("id")
+        
+        if not invoice_id:
+            raise Exception("Invoice created but no ID returned")
+        
+        logger.info(
+            f"Invoice committed successfully: "
+            f"id={invoice_id}, user_id={auth_user.user_id}"
+        )
+        
+        return InvoiceCommitResponse(
+            status="COMMITTED",
+            invoice_id=str(invoice_id),
+            message="Invoice saved successfully"
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to commit invoice: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "persistence_error",
+                "details": "Failed to save invoice to database"
+            }
+        )
+
+
+# TODO: Implement GET /invoices - List user's invoices
+# TODO: Implement GET /invoices/{invoice_id} - Get single invoice details
