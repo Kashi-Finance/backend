@@ -17,7 +17,24 @@ CRITICAL RULES (from .github/instructions/adk-agents.instructions.md):
 
 Always use the most recent version of the Google ADK documentation when creating
 or modifying adk agents or their schemas.
-
-TODO: Implement adk agents following .github/instructions/adk-agents.instructions.md
-TODO: Each agent will be in its own module (invoice_agent.py, recommendation_coordinator_agent.py, etc.)
 """
+
+from backend.agents.invoice import (
+    run_invoice_agent,
+    InvoiceAgentInput,
+    InvoiceAgentOutput,
+    INPUT_SCHEMA as INVOICE_INPUT_SCHEMA,
+    OUTPUT_SCHEMA as INVOICE_OUTPUT_SCHEMA,
+)
+
+__all__ = [
+    "run_invoice_agent",
+    "InvoiceAgentInput",
+    "InvoiceAgentOutput",
+    "INVOICE_INPUT_SCHEMA",
+    "INVOICE_OUTPUT_SCHEMA",
+]
+
+# TODO: Implement RecommendationCoordinatorAgent
+# TODO: Implement SearchAgent (AgentTool)
+# TODO: Implement FormatterAgent (AgentTool)
