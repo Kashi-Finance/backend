@@ -205,7 +205,7 @@ This implementation provides:
 
 ## What's Next
 
-### ✅ Completed (Database Integration)
+### ✅ Completed
 
 1. **Database Integration**: ✅ Connected `user_id` to RLS policies in Supabase
    - Created `backend/db/client.py` with authenticated Supabase client factory
@@ -215,16 +215,28 @@ This implementation provides:
    - All database operations respect RLS (`user_id = auth.uid()`)
    - Added comprehensive tests for service layer (13 tests passing)
 
+2. **User Profile Fetching**: ✅ Load user's `country`, `currency_preference` from DB
+   - Integrated `get_user_profile()` into `/invoices/ocr` endpoint
+   - Fetches user profile data using authenticated Supabase client
+   - Uses profile `country` and `currency_preference` for localized invoice extraction
+   - Handles missing profiles gracefully with sensible defaults (GT/GTQ)
+   - Updated all tests to mock `get_user_profile()` and `get_supabase_client()`
+   - Added test for profile-not-found scenario
+
+3. **Real Gemini Integration**: ✅ Replace mock `run_invoice_agent()` with real ADK calls
+   - Implemented full Gemini API integration using `google-genai` SDK
+   - Uses `gemini-2.5-flash` model for invoice OCR and extraction
+   - Implements function calling with three tools: `fetch()`, `getUserProfile()`, `getUserCategories()`
+   - Handles multi-turn conversations with automatic function call execution
+   - Returns structured JSON output matching `InvoiceAgentOutput` schema
+   - Configured with temperature=0.0 for deterministic extraction
+   - Includes comprehensive error handling and logging
+   - Tests updated to mock Gemini API client at the right level
+
 ### Pending (from TODO comments):
 
-2. **User Profile Fetching**: Load user's `country`, `currency_preference` from DB
-   - Service layer ready (`get_user_profile()` implemented)
-   - Need to integrate into `/invoices/ocr` endpoint
-3. **Image Storage**: Upload receipt images to Supabase Storage
+4. **Image Storage**: Upload receipt images to Supabase Storage
    - Need to implement storage upload before calling `/invoices/commit`
-4. **Real Gemini Integration**: Replace mock `run_invoice_agent()` with real ADK calls
-   - Current implementation uses mock data
-   - Need to integrate actual Google ADK / Gemini API calls
 
 ### Future Enhancements:
 - Token refresh endpoint
