@@ -21,7 +21,8 @@ Examples of what WILL be defined here eventually (per db.instructions.md):
 - Data access functions that enforce RLS
 - Helper functions for invoice.extracted_text formatting (EXTRACTED_INVOICE_TEXT_FORMAT)
 - Embedding generation and vector search utilities (using text-embedding-3-small)
-
-TODO: Implement data access functions following db.instructions.md
-TODO: Add Supabase client configuration (SUPABASE_URL, SUPABASE_KEY from env)
 """
+
+from .client import get_supabase_client
+
+__all__ = ["get_supabase_client"]
