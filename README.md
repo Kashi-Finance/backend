@@ -24,3 +24,11 @@ backend/
 └── db/                  # Database access layer (governed by db.instructions.md)
     └── ...              # Future: Supabase client, RLS-compliant queries
 ```
+
+## Flujo 
+Dev trabaja en feature/cualquier-cosa.
+Hace push a esa rama.
+Abre PR → develop.
+develop se usa como staging (deploy automático).
+Cuando ya está probado en staging, se abre PR de develop → main.
+main dispara el pipeline de prod.

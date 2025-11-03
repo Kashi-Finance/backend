@@ -1,0 +1,885 @@
+```sql
+
+-- =========================================================
+-- Extensiones necesarias
+-- =========================================================
+
+-- UUID generation (gen_random_uuid)
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- Vector similarity search (semantic search on transactions)
+CREATE EXTENSION IF NOT EXISTS "vector";
+
+-- =========================================================
+-- Enums
+-- =========================================================
+
+-- Tipo de cuenta financiera
+CREATE TYPE account_type_enum AS ENUM (
+  'cash',
+  'bank',
+  'credit_card',
+  'loan',
+  'remittance',
+  'crypto',
+  'investment'
+);
+
+-- Dirección del flujo de dinero (ingreso vs egreso)
+CREATE TYPE flow_type_enum AS ENUM (
+  'income',
+  'outcome'
+);
+
+-- Frecuencia/cadencia de budgets
+CREATE TYPE budget_frequency_enum AS ENUM (
+  'once',
+  'daily',
+  'weekly',
+  'monthly',
+  'yearly'
+);
+
+-- Frecuencia/cadencia de transacciones recurrentes
+CREATE TYPE recurring_frequency_enum AS ENUM (
+  'daily',
+  'weekly',
+  'monthly',
+  'yearly'
+);
+
+-- Estado del wishlist / meta de compra
+CREATE TYPE wishlist_status_enum AS ENUM (
+  'active',
+  'purchased',
+  'abandoned'
+);
+
+-- =========================================================
+-- Tabla: profile
+-- Perfil y preferencias del usuario
+-- (1:1 con auth.users)
+-- =========================================================
+
+CREATE TABLE public.profile (
+  user_id            uuid PRIMARY KEY
+                        REFERENCES auth.users(id) ON DELETE CASCADE,
+  first_name         text        NOT NULL,
+  last_name          text,
+  avatar_url         text,
+  currency_preference text       NOT NULL,          -- ej. 'GTQ'
+  locale             text        NOT NULL DEFAULT 'system',
+  country            text        NOT NULL,          -- ISO-2 (ej. 'GT')
+  created_at         timestamptz NOT NULL DEFAULT now(),
+  updated_at         timestamptz NOT NULL DEFAULT now()
+);
+
+-- =========================================================
+-- Tabla: account
+-- Cuentas financieras del usuario (banco, efectivo, tarjeta, etc.)
+-- =========================================================
+
+CREATE TABLE public.account (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     uuid        NOT NULL
+                          REFERENCES auth.users(id) ON DELETE CASCADE,
+  name        text        NOT NULL, -- Nombre legible ("Banco Industrial Ahorro")
+  type        account_type_enum NOT NULL,
+  currency    text        NOT NULL, -- Código moneda (ej. 'GTQ')
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- =========================================================
+-- Tabla: category
+-- Categorías de gasto/ingreso.
+-- Pueden ser globales del sistema (user_id NULL + key fijo)
+-- o personalizadas del usuario (user_id != NULL, sin key).
+-- =========================================================
+
+CREATE TABLE public.category (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     uuid
+                REFERENCES auth.users(id) ON DELETE CASCADE,
+  key         text UNIQUE,             -- Sólo para categorías globales del sistema
+  name        text        NOT NULL,    -- Etiqueta visible ("Supermercado")
+  flow_type   flow_type_enum NOT NULL, -- 'income' o 'outcome'
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+
+  -- Regla de consistencia:
+  -- - Si es global del sistema: user_id IS NULL y key NOT NULL
+  -- - Si es personalizada:     user_id IS NOT NULL y key IS NULL
+  CONSTRAINT category_scope_ck CHECK (
+    (user_id IS NULL AND key IS NOT NULL)
+    OR
+    (user_id IS NOT NULL AND key IS NULL)
+  )
+);
+
+-- =========================================================
+-- Tabla: invoice
+-- Factura / recibo confirmado por el usuario.
+-- Guardamos la ruta en storage y el texto OCR (para auditoría).
+-- NO guardamos categoría aquí.
+-- =========================================================
+
+CREATE TABLE public.invoice (
+  id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id        uuid        NOT NULL
+                              REFERENCES auth.users(id) ON DELETE CASCADE,
+  storage_path   text        NOT NULL, -- ruta final en Supabase Storage
+  extracted_text text        NOT NULL, -- texto OCR con formato específico
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  updated_at     timestamptz NOT NULL DEFAULT now()
+);
+
+-- =========================================================
+-- Tabla: transaction
+-- Movimiento financiero real (ingreso o egreso).
+-- Puede venir de:
+--   - confirmación de OCR (y enlazar invoice_id)
+--   - transacción manual
+--   - transacción recurrente materializada
+--
+-- balance de la cuenta se deriva sumando estas filas (no se guarda balance en tabla).
+-- =========================================================
+
+CREATE TABLE public.transaction (
+  id                        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id                   uuid        NOT NULL
+                                      REFERENCES auth.users(id) ON DELETE CASCADE,
+  account_id                uuid        NOT NULL
+                                      REFERENCES public.account(id) ON DELETE CASCADE,
+  category_id               uuid        NOT NULL
+                                      REFERENCES public.category(id) ON DELETE RESTRICT,
+  invoice_id                uuid
+                                      REFERENCES public.invoice(id)
+                                      ON DELETE SET NULL,
+  flow_type                 flow_type_enum NOT NULL, -- 'income' o 'outcome'
+  amount                    numeric(12,2)  NOT NULL
+                                      CHECK (amount >= 0),
+  date                      timestamptz    NOT NULL, -- fecha efectiva del gasto/ingreso
+  description               text,
+  -- embedding semántico para búsqueda tipo "gastos de super" aunque el texto varíe.
+  -- Ajusta la dimensión (1536 es apropiado para modelos como text-embedding-3-small).
+  embedding                 vector(1536),
+  -- Para modelar transferencias internas entre cuentas:
+  -- una fila outcome en la cuenta origen y otra income en la cuenta destino,
+  -- ambas enlazadas entre sí.
+  paired_transaction_id     uuid
+                                      REFERENCES public.transaction(id)
+                                      ON DELETE SET NULL,
+  created_at                timestamptz NOT NULL DEFAULT now(),
+  updated_at                timestamptz NOT NULL DEFAULT now()
+);
+
+-- Índice vectorial básico para similitud semántica
+-- (podrías ajustar el tipo de índice ivfflat y parámetros en producción)
+CREATE INDEX transaction_embedding_idx
+  ON public.transaction
+  USING ivfflat (embedding vector_cosine_ops)
+  WITH (lists = 100);
+
+-- Índices útiles adicionales
+CREATE INDEX transaction_user_date_idx
+  ON public.transaction (user_id, date);
+
+CREATE INDEX transaction_account_idx
+  ON public.transaction (account_id);
+
+-- =========================================================
+-- Tabla: budget
+-- Presupuesto / límite de gasto. Puede ser recurrente
+-- (daily / weekly / monthly / yearly, con intervalo),
+-- o de una sola vez ('once') con fecha de fin opcional.
+-- =========================================================
+
+CREATE TABLE public.budget (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id       uuid           NOT NULL
+                               REFERENCES auth.users(id) ON DELETE CASCADE,
+  limit_amount  numeric(12,2)  NOT NULL
+                               CHECK (limit_amount > 0),
+  frequency     budget_frequency_enum NOT NULL,
+  -- Cada cuánto se repite según la unidad 'frequency'
+  interval      integer        NOT NULL DEFAULT 1
+                               CHECK (interval >= 1),
+  start_date    date           NOT NULL,
+  end_date      date,                -- fecha límite dura (para presupuestos tipo proyecto)
+  is_active     boolean        NOT NULL DEFAULT true,
+  created_at    timestamptz    NOT NULL DEFAULT now(),
+  updated_at    timestamptz    NOT NULL DEFAULT now()
+);
+
+CREATE INDEX budget_user_active_idx
+  ON public.budget (user_id, is_active);
+
+-- =========================================================
+-- Tabla: budget_category
+-- Relación N:M entre un budget y las categorías que "gastan" de ese budget.
+-- Evita duplicados usando PK compuesta (budget_id, category_id).
+-- =========================================================
+
+CREATE TABLE public.budget_category (
+  budget_id    uuid NOT NULL
+                     REFERENCES public.budget(id) ON DELETE CASCADE,
+  category_id  uuid NOT NULL
+                     REFERENCES public.category(id) ON DELETE CASCADE,
+  user_id      uuid NOT NULL
+                     REFERENCES auth.users(id) ON DELETE CASCADE,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  updated_at   timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (budget_id, category_id)
+);
+
+CREATE INDEX budget_category_user_idx
+  ON public.budget_category (user_id);
+
+-- =========================================================
+-- Tabla: recurring_transaction
+-- Regla/contrato para generar transacciones automáticas en el futuro.
+-- Cuando llega next_run_date, el backend inserta una fila en public.transaction
+-- y luego avanza next_run_date.
+-- También soporta transferencias internas emparejando dos reglas.
+-- =========================================================
+
+CREATE TABLE public.recurring_transaction (
+  id                              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id                         uuid        NOT NULL
+                                            REFERENCES auth.users(id) ON DELETE CASCADE,
+  account_id                      uuid        NOT NULL
+                                            REFERENCES public.account(id) ON DELETE CASCADE,
+  category_id                     uuid
+                                            REFERENCES public.category(id)
+                                            ON DELETE SET NULL,
+  flow_type                       flow_type_enum NOT NULL, -- 'income' / 'outcome'
+  amount                          numeric(12,2)  NOT NULL
+                                            CHECK (amount >= 0),
+  description                     text        NOT NULL,
+  -- Para modelar transferencias internas recurrentes:
+  paired_recurring_transaction_id uuid
+                                            REFERENCES public.recurring_transaction(id)
+                                            ON DELETE SET NULL,
+  frequency                       recurring_frequency_enum NOT NULL,
+  interval                        integer     NOT NULL DEFAULT 1
+                                            CHECK (interval >= 1),
+  by_weekday                      text[],     -- Ej: {"monday","friday"} si weekly
+  by_monthday                     integer[],  -- Ej: {1,15} si monthly
+  start_date                      date        NOT NULL,
+  next_run_date                   date        NOT NULL,
+  end_date                        date,
+  is_active                       boolean     NOT NULL DEFAULT true,
+  created_at                      timestamptz NOT NULL DEFAULT now(),
+  updated_at                      timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX recurring_tx_user_active_idx
+  ON public.recurring_transaction (user_id, is_active, next_run_date);
+
+-- =========================================================
+-- Tabla: wishlist
+-- Representa la meta principal de compra del usuario.
+-- Guarda la intención y contexto de lo que desea adquirir,
+-- incluyendo presupuesto, fecha objetivo y notas personales.
+-- Puede existir sin tener ítems asociados.
+-- =========================================================
+
+CREATE TABLE public.wishlist (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL
+        REFERENCES auth.users(id)
+        ON DELETE CASCADE,
+    goal_title TEXT NOT NULL,
+    budget_hint NUMERIC(12,2) NOT NULL,
+    currency_code TEXT NOT NULL,
+    target_date DATE NULL,
+    preferred_store TEXT NULL,
+    user_note TEXT NULL,
+    status wishlist_status_enum NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Helpful indexes:
+--  1) Fast lookup of all wishlists for a user
+--  2) Filter by status (active / purchased / abandoned)
+--  3) Sort by created_at in UI / dashboard
+
+CREATE INDEX wishlist_user_id_idx
+    ON public.wishlist (user_id);
+
+CREATE INDEX wishlist_user_status_idx
+    ON public.wishlist (user_id, status);
+
+CREATE INDEX wishlist_created_at_idx
+    ON public.wishlist (created_at DESC);
+
+
+-- =========================================================
+-- Tabla: wishlist_item
+-- Representa una opción específica guardada por el usuario
+-- dentro de una meta. Incluye tienda, precio, URL y garantía.
+-- Solo se crea si el usuario decide guardar la recomendación.
+-- =========================================================
+
+CREATE TABLE public.wishlist_item (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    wishlist_id UUID NOT NULL
+        REFERENCES public.wishlist (id)
+        ON DELETE CASCADE,
+    product_title TEXT NOT NULL,
+    price_total NUMERIC(12,2) NOT NULL,
+    seller_name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    pickup_available BOOLEAN NOT NULL DEFAULT false,
+    warranty_info TEXT NOT NULL,
+    copy_for_user TEXT NOT NULL,
+    badges JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Helpful indexes:
+--  1) Fast lookup of all saved offers under a given wishlist
+--  2) Fast lookup of items per user through their wishlist (partial join pattern)
+
+CREATE INDEX wishlist_item_wishlist_id_idx
+    ON public.wishlist_item (wishlist_id);
+
+-- Composite index for join pattern:
+-- allows efficiently checking ownership in policies / queries like:
+--   WHERE w.user_id = auth.uid() AND wi.wishlist_id = w.id
+CREATE INDEX wishlist_item_join_idx
+    ON public.wishlist_item (wishlist_id, created_at DESC);
+
+-- =========================================================
+-- Helpers
+-- =========================================================
+-- Nota: auth.uid() solo existe dentro de policies en Supabase.
+-- auth.role() permite distinguir el service_role usado por el backend seguro.
+
+-- =========================================================
+-- Habilitar RLS en todas las tablas mutables por usuario
+-- =========================================================
+
+ALTER TABLE public.profile                  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.account                  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.category                 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.invoice                  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.transaction              ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.budget                   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.budget_category          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.recurring_transaction    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.wishlist                 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.wishlist_item            ENABLE ROW LEVEL SECURITY;
+
+-- =========================================================
+-- Tabla: profile
+-- 1:1 con auth.users. El usuario puede ver/editar SOLO su propio perfil.
+-- El servicio interno (service_role) puede crear/actualizar para bootstrap.
+-- =========================================================
+
+-- SELECT
+CREATE POLICY "profile_select_own"
+ON public.profile
+FOR SELECT
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- INSERT
+CREATE POLICY "profile_insert_self_or_service"
+ON public.profile
+FOR INSERT
+WITH CHECK (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- UPDATE
+CREATE POLICY "profile_update_own"
+ON public.profile
+FOR UPDATE
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+)
+WITH CHECK (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- DELETE
+CREATE POLICY "profile_delete_self_or_service"
+ON public.profile
+FOR DELETE
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+
+-- =========================================================
+-- Tabla: account
+-- Cada cuenta pertenece a un usuario.
+-- =========================================================
+
+-- SELECT
+CREATE POLICY "account_select_own"
+ON public.account
+FOR SELECT
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- INSERT
+CREATE POLICY "account_insert_own"
+ON public.account
+FOR INSERT
+WITH CHECK (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- UPDATE
+CREATE POLICY "account_update_own"
+ON public.account
+FOR UPDATE
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+)
+WITH CHECK (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- DELETE
+CREATE POLICY "account_delete_own"
+ON public.account
+FOR DELETE
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+
+-- =========================================================
+-- Tabla: category
+-- Caso especial:
+--   - Global (user_id IS NULL): todos pueden verla, nadie la edita salvo service_role.
+--   - Personal (user_id = auth.uid()): solo ese user puede verla y tocarla.
+-- =========================================================
+
+-- SELECT (puedes ver tus categorías Y las globales)
+CREATE POLICY "category_select_allowed"
+ON public.category
+FOR SELECT
+USING (
+  user_id = auth.uid()
+  OR user_id IS NULL
+  OR auth.role() = 'service_role'
+);
+
+-- INSERT (solo categorías personales propias; globales SOLO service_role)
+CREATE POLICY "category_insert_personal"
+ON public.category
+FOR INSERT
+WITH CHECK (
+  (
+    user_id = auth.uid()
+    AND key IS NULL
+  )
+  OR auth.role() = 'service_role'
+);
+
+-- UPDATE (puedes actualizar SOLO tus categorías personales; nunca las globales,
+-- excepto service_role)
+CREATE POLICY "category_update_personal"
+ON public.category
+FOR UPDATE
+USING (
+  (
+    user_id = auth.uid()
+    AND key IS NULL
+  )
+  OR auth.role() = 'service_role'
+)
+WITH CHECK (
+  (
+    user_id = auth.uid()
+    AND key IS NULL
+  )
+  OR auth.role() = 'service_role'
+);
+
+-- DELETE (solo tus categorías personales; globales protegidas)
+CREATE POLICY "category_delete_personal"
+ON public.category
+FOR DELETE
+USING (
+  (
+    user_id = auth.uid()
+    AND key IS NULL
+  )
+  OR auth.role() = 'service_role'
+);
+
+
+-- =========================================================
+-- Tabla: invoice
+-- Facturas subidas por el usuario.
+-- =========================================================
+
+-- SELECT
+CREATE POLICY "invoice_select_own"
+ON public.invoice
+FOR SELECT
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- INSERT
+CREATE POLICY "invoice_insert_own"
+ON public.invoice
+FOR INSERT
+WITH CHECK (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- UPDATE
+CREATE POLICY "invoice_update_own"
+ON public.invoice
+FOR UPDATE
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+)
+WITH CHECK (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- DELETE
+CREATE POLICY "invoice_delete_own"
+ON public.invoice
+FOR DELETE
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+
+-- =========================================================
+-- Tabla: transaction
+-- Movimientos confirmados (incluye embedding).
+-- =========================================================
+
+-- SELECT
+CREATE POLICY "transaction_select_own"
+ON public.transaction
+FOR SELECT
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- INSERT
+CREATE POLICY "transaction_insert_own"
+ON public.transaction
+FOR INSERT
+WITH CHECK (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- UPDATE
+CREATE POLICY "transaction_update_own"
+ON public.transaction
+FOR UPDATE
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+)
+WITH CHECK (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- DELETE
+CREATE POLICY "transaction_delete_own"
+ON public.transaction
+FOR DELETE
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- Índices ya definidos en el DDL original
+-- (transaction_user_date_idx, transaction_account_idx, transaction_embedding_idx)
+-- siguen siendo válidos con RLS.
+
+
+-- =========================================================
+-- Tabla: budget
+-- Presupuestos del usuario.
+-- =========================================================
+
+-- SELECT
+CREATE POLICY "budget_select_own"
+ON public.budget
+FOR SELECT
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- INSERT
+CREATE POLICY "budget_insert_own"
+ON public.budget
+FOR INSERT
+WITH CHECK (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- UPDATE
+CREATE POLICY "budget_update_own"
+ON public.budget
+FOR UPDATE
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+)
+WITH CHECK (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- DELETE
+CREATE POLICY "budget_delete_own"
+ON public.budget
+FOR DELETE
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+
+-- =========================================================
+-- Tabla: budget_category
+-- Relación N:M entre budget y category. Incluye user_id solo por seguridad/RLS.
+-- =========================================================
+
+-- SELECT
+CREATE POLICY "budget_category_select_own"
+ON public.budget_category
+FOR SELECT
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- INSERT
+CREATE POLICY "budget_category_insert_own"
+ON public.budget_category
+FOR INSERT
+WITH CHECK (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- UPDATE
+CREATE POLICY "budget_category_update_own"
+ON public.budget_category
+FOR UPDATE
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+)
+WITH CHECK (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- DELETE
+CREATE POLICY "budget_category_delete_own"
+ON public.budget_category
+FOR DELETE
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+
+-- =========================================================
+-- Tabla: recurring_transaction
+-- Reglas para generar transacciones futuras.
+-- =========================================================
+
+-- SELECT
+CREATE POLICY "recurring_tx_select_own"
+ON public.recurring_transaction
+FOR SELECT
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- INSERT
+CREATE POLICY "recurring_tx_insert_own"
+ON public.recurring_transaction
+FOR INSERT
+WITH CHECK (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- UPDATE
+CREATE POLICY "recurring_tx_update_own"
+ON public.recurring_transaction
+FOR UPDATE
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+)
+WITH CHECK (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- DELETE
+CREATE POLICY "recurring_tx_delete_own"
+ON public.recurring_transaction
+FOR DELETE
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+
+-- =========================================================
+-- Tabla: wishlist
+-- Cada meta pertenece a un usuario (user_id = auth.uid()).
+-- El servicio interno (service_role) puede leer/escribir
+-- todas las filas para tareas automáticas o mantenimiento.
+-- =========================================================
+
+-- SELECT
+CREATE POLICY "wishlist_select_own_or_service"
+ON public.wishlist
+FOR SELECT
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- INSERT
+CREATE POLICY "wishlist_insert_self_or_service"
+ON public.wishlist
+FOR INSERT
+WITH CHECK (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- UPDATE
+CREATE POLICY "wishlist_update_own_or_service"
+ON public.wishlist
+FOR UPDATE
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+)
+WITH CHECK (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- DELETE
+CREATE POLICY "wishlist_delete_own_or_service"
+ON public.wishlist
+FOR DELETE
+USING (
+  user_id = auth.uid()
+  OR auth.role() = 'service_role'
+);
+
+-- =========================================================
+-- Tabla: wishlist_item
+-- Cada ítem pertenece a una meta (wishlist_id) la cual 
+-- pertenece a un usuario. El acceso depende de esa relación.
+-- El servicio interno (service_role) puede leer/escribir
+-- todos los ítems para mantenimiento o auditoría.
+-- =========================================================
+
+-- SELECT
+CREATE POLICY "wishlist_item_select_own_or_service"
+ON public.wishlist_item
+FOR SELECT
+USING (
+  EXISTS (
+    SELECT 1
+    FROM public.wishlist w
+    WHERE w.id = wishlist_item.wishlist_id
+      AND (w.user_id = auth.uid() OR auth.role() = 'service_role')
+  )
+);
+
+-- INSERT
+CREATE POLICY "wishlist_item_insert_self_or_service"
+ON public.wishlist_item
+FOR INSERT
+WITH CHECK (
+  EXISTS (
+    SELECT 1
+    FROM public.wishlist w
+    WHERE w.id = wishlist_item.wishlist_id
+      AND (w.user_id = auth.uid() OR auth.role() = 'service_role')
+  )
+);
+
+-- UPDATE
+CREATE POLICY "wishlist_item_update_own_or_service"
+ON public.wishlist_item
+FOR UPDATE
+USING (
+  EXISTS (
+    SELECT 1
+    FROM public.wishlist w
+    WHERE w.id = wishlist_item.wishlist_id
+      AND (w.user_id = auth.uid() OR auth.role() = 'service_role')
+  )
+)
+WITH CHECK (
+  EXISTS (
+    SELECT 1
+    FROM public.wishlist w
+    WHERE w.id = wishlist_item.wishlist_id
+      AND (w.user_id = auth.uid() OR auth.role() = 'service_role')
+  )
+);
+
+-- DELETE
+CREATE POLICY "wishlist_item_delete_own_or_service"
+ON public.wishlist_item
+FOR DELETE
+USING (
+  EXISTS (
+    SELECT 1
+    FROM public.wishlist w
+    WHERE w.id = wishlist_item.wishlist_id
+      AND (w.user_id = auth.uid() OR auth.role() = 'service_role')
+  )
+);
+
+-- =========================================================
+-- FIN DEL DDL
+-- =========================================================
+
+```
