@@ -1,47 +1,48 @@
 """
-Kashi Finances Backend - Main FastAPI application entrypoint.
+FastAPI application entry point for Kashi Finances backend.
 
-This module creates the FastAPI app instance and mounts all routers.
-Future routers (invoices, recommendations, transactions, etc.) will follow
-the patterns defined in .github/instructions/api-architecture.instructions.md.
+This module creates the FastAPI app instance and registers all routers.
 """
 
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.routes import health
-from backend.utils.logging import get_logger
+from backend.routes.invoices import router as invoices_router
 
-logger = get_logger(__name__)
-
-# Create FastAPI application instance
-app = FastAPI(
-    title="Kashi Finances API",
-    description="Backend API for orchestrating adk agents built on Google ADK",
-    version="0.1.0",
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
-# Configure CORS for mobile app (adjust origins as needed for production)
+logger = logging.getLogger(__name__)
+
+# Create FastAPI app
+app = FastAPI(
+    title="Kashi Finances API",
+    description="Backend service for Kashi Finances mobile app",
+    version="0.1.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
+
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # TODO: Restrict to actual mobile app origins in production
+    allow_origins=["*"],  # TODO: Restrict to mobile app origins in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Mount routers
-# Health check (public, no auth required)
-app.include_router(health.router, tags=["health"])
+# Register routers
+app.include_router(invoices_router)
 
-# Future routers will be mounted here following api-architecture.instructions.md:
-# - /invoices/* → InvoiceAgent flows (OCR, commit)
-# - /recommendations/* → RecommendationCoordinatorAgent flows
-# - /transactions/* → manual transaction CRUD
-# - /accounts/* → account management
-# - /budgets/* → budget management
-# - /wishlists/* → wishlist/goals management
-# Each will enforce Supabase Auth via backend/auth/auth.py verify_supabase_token()
+# Health check endpoint
+@app.get("/health", tags=["system"])
+async def health_check():
+    """Check if API is running."""
+    return {"status": "healthy", "service": "kashi-finances-backend"}
 
-logger.info("Kashi Finances API initialized successfully")
+logger.info("FastAPI app initialized successfully")

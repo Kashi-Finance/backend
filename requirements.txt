@@ -1,24 +1,29 @@
 # Kashi Finances Backend - Python Dependencies
 # 
 # Core web framework
-fastapi==0.109.0
+fastapi==0.120.4
+starlette==0.41.6
 uvicorn[standard]==0.27.0
-pydantic==2.5.3
+pydantic==2.12.3
 python-multipart==0.0.6
 
 # Authentication & Database
-# TODO: Uncomment when implementing Supabase Auth integration
-# supabase==2.3.0
+supabase==2.23.0
+PyJWT==2.10.1
+cryptography==46.0.3
 
-# Google ADK for adk agents
-# TODO: Add Google ADK package when implementing agents
-# Consult the most recent Google ADK documentation for installation
+# Google Gemini SDK for adk agents
+# Using latest stable version for function calling and tool use
+google-genai==0.3.0
 
 # Logging and utilities
 python-dotenv==1.0.0
 
+# Testing
+pytest==8.4.2
+pytest-asyncio==0.24.0
+httpx==0.28.4
+
 # Development dependencies (optional)
-# pytest==7.4.3
-# httpx==0.26.0
 # black==23.12.1
 # mypy==1.8.0
