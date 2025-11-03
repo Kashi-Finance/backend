@@ -44,7 +44,7 @@ Purpose:
         Currency: {currency}
         Purchased Items:
         {purchased_items}
-        NIT: {nit}
+        Receipt Image ID: {receipt_id}
         """
 
 Rules:
