@@ -9,6 +9,7 @@ Uses Supabase's new JWT Signing Keys system with ECC (P-256) public key verifica
 
 import logging
 from typing import Annotated
+from dataclasses import dataclass
 from fastapi import Header, HTTPException, status
 from jwt import PyJWKClient, decode
 from jwt.exceptions import InvalidTokenError, ExpiredSignatureError, PyJWKClientError
@@ -20,6 +21,19 @@ logger = logging.getLogger(__name__)
 # Initialize JWKS client for fetching and caching Supabase's public keys
 # The client automatically handles caching and key rotation (cache_keys=True by default)
 _jwks_client: PyJWKClient | None = None
+
+
+@dataclass
+class AuthenticatedUser:
+    """
+    Represents an authenticated user with their token.
+    
+    Attributes:
+        user_id: The user's UUID from the JWT token's 'sub' claim
+        access_token: The full JWT access token (for creating authenticated Supabase clients)
+    """
+    user_id: str
+    access_token: str
 
 
 def get_jwks_client() -> PyJWKClient:
@@ -167,6 +181,113 @@ async def verify_token(authorization: Annotated[str | None, Header()] = None) ->
         
     except Exception as e:
         # Catch-all for unexpected errors (should be rare)
+        logger.error(f"Unexpected error during token verification: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "unauthorized", "details": "Token verification failed"}
+        )
+
+
+async def get_authenticated_user(
+    authorization: Annotated[str | None, Header()] = None
+) -> AuthenticatedUser:
+    """
+    Verify token and return authenticated user with token.
+    
+    Similar to verify_token(), but returns both user_id AND the token itself.
+    This is useful when you need to create an authenticated Supabase client.
+    
+    Args:
+        authorization: Authorization header value
+        
+    Returns:
+        AuthenticatedUser: Contains user_id and access_token
+        
+    Raises:
+        HTTPException: 401 if token is missing, invalid, or expired
+        
+    Usage:
+        @app.post("/invoices/ocr")
+        async def create_invoice(
+            auth_user: AuthenticatedUser = Depends(get_authenticated_user)
+        ):
+            # Create authenticated Supabase client
+            supabase_client = get_supabase_client(auth_user.access_token)
+            # Use auth_user.user_id for logging/validation
+            pass
+    """
+    if not authorization:
+        logger.warning("Missing Authorization header")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "unauthorized", "details": "Missing Authorization header"}
+        )
+    
+    # Extract token from "Bearer <token>" format
+    parts = authorization.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        logger.warning("Invalid Authorization header format")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "unauthorized", "details": "Invalid Authorization header format"}
+        )
+    
+    token = parts[1]
+    
+    # Verify JWT token using Supabase's JWT Signing Keys (JWKS)
+    try:
+        jwks_client = get_jwks_client()
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
+        
+        payload = decode(
+            token,
+            signing_key.key,
+            algorithms=["ES256"],
+            audience="authenticated",
+            issuer=settings.SUPABASE_URL,
+            options={
+                "verify_signature": True,
+                "verify_exp": True,
+                "verify_aud": True,
+                "verify_iss": True,
+            }
+        )
+        
+        user_id = payload.get("sub")
+        
+        if not user_id:
+            logger.error("Token payload missing 'sub' claim")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error": "unauthorized", "details": "Invalid token: missing user ID"}
+            )
+        
+        logger.info(f"Token verified successfully for user_id={user_id}")
+        
+        return AuthenticatedUser(user_id=user_id, access_token=token)
+        
+    except ExpiredSignatureError:
+        logger.warning("Token has expired")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "token_expired", "details": "Authentication token has expired"}
+        )
+    
+    except PyJWKClientError as e:
+        logger.error(f"JWKS client error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "jwks_error", "details": "Unable to verify token signature"}
+        )
+        
+    except InvalidTokenError as e:
+        logger.warning(f"Invalid token: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "invalid_token", "details": "Invalid authentication token"}
+        )
+        
+    except Exception as e:
         logger.error(f"Unexpected error during token verification: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
