@@ -142,7 +142,6 @@ That row includes a column `extracted_text`. Its value MUST always follow this c
     Currency: {currency}
     Purchased Items:
     {purchased_items}
-    Receipt Image ID: {receipt_id}
     """
 
 Rules:
@@ -151,7 +150,6 @@ Rules:
 - `total_amount` is numeric rendered as string (e.g. "123.45").
 - `currency` is a currency code or symbol (e.g. "GTQ").
 - `purchased_items` is a bullet/line list of the parsed items, quantities and prices.
-- `receipt_id` is the internal ID / storage reference for the uploaded invoice image.
 
 The FastAPI layer is responsible for making sure that when we go to persist `extracted_text`, it exactly matches this template.
 
@@ -203,3 +201,194 @@ No stack traces or secret keys in API responses.
 - [ ] If invoice data is involved, enforce the exact EXTRACTED_INVOICE_TEXT_FORMAT for `invoice.extracted_text`.
 - [ ] No direct SQL or schema invention; leave `# TODO(db-team): ...`.
 - [ ] Log non-sensitive info only.
+
+
+## 9. Invoice Endpoints Reference
+
+This section documents the complete invoice API surface.
+
+### 9.1 POST /invoices/ocr
+
+**Purpose:** Upload receipt image for OCR extraction (PREVIEW ONLY).
+
+**Authentication:** Required (Supabase JWT token).
+
+**Request:**
+- Content-Type: `multipart/form-data`
+- Field: `image` (file, required) - Receipt/invoice image (JPEG, PNG)
+- Max size: 5MB
+
+**Response Models:**
+- `InvoiceOCRResponseDraft` - Successful extraction
+  - `status: "DRAFT"`
+  - `store_name: str`
+  - `transaction_time: str` (ISO-8601)
+  - `total_amount: float`
+  - `currency: str` (e.g. "GTQ")
+  - `items: List[PurchasedItemResponse]`
+  - `category_suggestion: CategorySuggestionResponse`
+- `InvoiceOCRResponseInvalid` - Image cannot be processed
+  - `status: "INVALID_IMAGE"`
+  - `reason: str` (human-readable explanation)
+
+**Agent Interaction:**
+- Calls `run_invoice_agent()` (single-shot multimodal vision workflow)
+- Passes `user_categories` fetched from endpoint (not fetched by agent)
+- Uses Gemini's native vision capabilities to read receipt image
+- NO OCR text fallback - image is REQUIRED
+- Temperature=0.0 for deterministic extraction
+- Returns structured JSON via `response_mime_type="application/json"`
+
+**RLS Behavior:**
+- User profile and categories fetched with user's access token
+- NO database persistence (preview only)
+- Agent receives user context but does not write to DB
+
+**Error Codes:**
+- 401: Missing or invalid authentication token
+- 400: Invalid file type, file too large, or out-of-scope request
+- 500: Agent error or internal server error
+
+---
+
+### 9.2 POST /invoices/commit
+
+**Purpose:** Persist a confirmed invoice to the database.
+
+**Authentication:** Required (Supabase JWT token).
+
+**Request Model:** `InvoiceCommitRequest`
+```json
+{
+  "store_name": "Super Despensa Familiar",
+  "transaction_time": "2025-10-30T14:32:00-06:00",
+  "total_amount": "128.50",
+  "currency": "GTQ",
+  "purchased_items": "- Leche 1L (2x) @ Q12.50 = Q25.00\n- Pan integral @ Q15.00 = Q15.00",
+  "storage_path": "12345678-9",
+  "storage_path": "receipts/user-uuid/image-uuid.jpg"
+}
+```
+
+**Response Model:** `InvoiceCommitResponse`
+```json
+{
+  "status": "COMMITTED",
+  "invoice_id": "invoice-uuid-here",
+  "message": "Invoice saved successfully"
+}
+```
+
+**Database Behavior:**
+- Inserts record into `invoice` table
+- Formats data into canonical `EXTRACTED_INVOICE_TEXT_FORMAT`
+- RLS enforces `user_id = auth.uid()` automatically
+- User can only create invoices for themselves
+
+**Error Codes:**
+- 401: Missing or invalid authentication token
+- 400: Invalid request data (validation error)
+- 500: Database persistence error
+
+---
+
+### 9.3 GET /invoices
+
+**Purpose:** List all invoices belonging to the authenticated user.
+
+**Authentication:** Required (Supabase JWT token).
+
+**Query Parameters:**
+- `limit: int = 50` - Maximum number of invoices to return
+- `offset: int = 0` - Number of invoices to skip (pagination)
+
+**Response Model:** `InvoiceListResponse`
+```json
+{
+  "invoices": [
+    {
+      "id": "invoice-uuid",
+      "user_id": "user-uuid",
+      "storage_path": "receipts/user-uuid/image-uuid.jpg",
+      "extracted_text": "Store Name: ...\nTransaction Time: ...\n...",
+      "created_at": "2025-11-03T10:15:00Z",
+      "updated_at": "2025-11-03T10:15:00Z"
+    }
+  ],
+  "count": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+**Database Behavior:**
+- Queries `invoice` table with `.order("created_at", desc=True)`
+- RLS automatically filters to `user_id = auth.uid()`
+- Supports pagination via limit/offset
+- Returns invoices newest first
+
+**Error Codes:**
+- 401: Missing or invalid authentication token
+- 500: Database query error
+
+---
+
+### 9.4 GET /invoices/{invoice_id}
+
+**Purpose:** Retrieve details of a single invoice by its ID.
+
+**Authentication:** Required (Supabase JWT token).
+
+**Path Parameters:**
+- `invoice_id: str` - UUID of the invoice to retrieve
+
+**Response Model:** `InvoiceDetailResponse`
+```json
+{
+  "id": "invoice-uuid",
+  "user_id": "user-uuid",
+  "storage_path": "receipts/user-uuid/image-uuid.jpg",
+  "extracted_text": "Store Name: Super Despensa\nTransaction Time: 2025-10-30T14:32:00-06:00\nTotal Amount: 128.50\nCurrency: GTQ\nPurchased Items:\n- Leche 1L (2x) @ Q12.50 = Q25.00\nNIT: 12345678-9",
+  "created_at": "2025-11-03T10:15:00Z",
+  "updated_at": "2025-11-03T10:15:00Z"
+}
+```
+
+**Database Behavior:**
+- Queries `invoice` table with `.eq("id", invoice_id)`
+- RLS automatically enforces `user_id = auth.uid()`
+- Returns 404 if invoice doesn't exist or belongs to another user
+
+**Error Codes:**
+- 401: Missing or invalid authentication token
+- 404: Invoice not found or not accessible by user
+- 500: Database query error
+
+---
+
+### 9.5 InvoiceAgent Architecture Summary
+
+**Current Implementation (as of Nov 2025):**
+- **NOT an ADK agent** - uses single-shot multimodal LLM workflow
+- **Why:** Invoice extraction is deterministic; doesn't need agentic reasoning
+- **Input:** Base64-encoded receipt image (REQUIRED, no OCR text fallback)
+- **Context:** User categories and profile passed as parameters by endpoint
+- **Process:** One call to Gemini's vision model with complete context
+- **Output:** Structured JSON (`InvoiceAgentOutput`) with extracted data
+- **Temperature:** 0.0 for deterministic extraction
+- **Format:** `response_mime_type="application/json"` for structured output
+
+**Endpoint Responsibilities:**
+1. Authenticate user via Supabase Auth
+2. Fetch `user_profile` (country, currency_preference)
+3. Fetch `user_categories` (for category matching)
+4. Call `run_invoice_agent()` with image + context
+5. Map agent output to response model
+6. Handle DRAFT vs INVALID_IMAGE status
+
+**Agent Does NOT:**
+- Fetch its own data (categories, profile)
+- Use function-calling or tool orchestration
+- Iterate or retry extractions
+- Write to database directly
+- Support OCR text input (image-only)

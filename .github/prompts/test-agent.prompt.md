@@ -55,7 +55,6 @@ Follow ALL rules below. Do not introduce new agents or new endpoints unless expl
            Currency: {currency}
            Purchased Items:
            {purchased_items}
-           Receipt Image ID: {receipt_id}
 
      - The test SHOULD verify these keys exist and are well-formed.
    - For RecommendationCoordinatorAgent:

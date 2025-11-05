@@ -85,6 +85,8 @@ When you create or modify an endpoint:
   5. Receive the agent result, map it into `ResponseModel`.
   6. Return the validated response model. The FastAPI decorator MUST declare `response_model=ResponseModel`.
 
+- Documentation: ALWAYS update `API-endpoints.md` when creating or modifying an endpoint if the change is significant and should be documented for the team or API consumers.
+
 - Error handling:
   - Use `HTTPException` with a `status_code` and a dict like `{ "error": "<short_code>", "details": "<human_readable>" }`.
   - Do not leak stack traces, raw agent messages, or secrets.
@@ -129,6 +131,22 @@ Always use the most recent version of the Google ADK documentation when creating
 - `invoice.extracted_text` MUST ALWAYS respect the required canonical format described in backend/api-architecture.instructions.md and backend/agents.instructions.md.
 
 Never bypass RLS. Assume every row is protected by `user_id = auth.uid()`.
+
+## 6a. API Contract & Documentation Source of Truth
+
+**CRITICAL: `API-endpoints.md` is the SINGLE SOURCE OF TRUTH for all REST endpoint contracts, request/response shapes, field names, and types.**
+
+When working on any endpoint or schema:
+1. **Always refer to `API-endpoints.md` first** for the authoritative contract.
+2. If you find **inconsistencies** between `API-endpoints.md` and other instruction files (e.g., `api-architecture.instructions.md`, `invoice-agent-specs.md`), **treat `API-endpoints.md` as correct** and update the conflicting file to match.
+3. If you need to change an endpoint contract, **update `API-endpoints.md` first**, then propagate changes to all related files (tests, schemas, services, agent specs, other instructions).
+4. All Pydantic request/response models in `backend/schemas/` **MUST match exactly** the shape and field names documented in `API-endpoints.md`.
+
+This ensures:
+- No ambiguity about what the frontend can expect
+- Type safety across backend/frontend integration
+- Consistency in Pydantic validation
+- Single point of reference when debugging API issues
 
 
 ## 7. Style, Formatting, and Quality
