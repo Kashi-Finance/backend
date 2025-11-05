@@ -148,6 +148,21 @@ The `verify_token()` dependency returns these errors:
 **Cause**: `.env` file is missing or incomplete  
 **Fix**: Copy `.env.example` to `.env` and set `SUPABASE_URL`
 
+
+## Security Improvements
+
+This implementation provides:
+
+**Real JWT Verification** - No more mock auth in production  
+**Signature Validation** - Ensures token wasn't tampered with  
+**Expiration Checks** - Expired tokens are rejected  
+**Audience Validation** - Ensures token is for the right service  
+**Secret Management** - Credentials in `.env`, not code  
+**Type Safety** - All config values are typed  
+**Fail-Fast Validation** - Production won't start with bad config  
+**Comprehensive Logging** - Auth events are logged for monitoring  
+**Test Isolation** - Tests don't need real credentials  
+
 ## Related Documentation
 
 - [Supabase JWT Signing Keys](https://supabase.com/docs/guides/auth/signing-keys)
@@ -155,8 +170,3 @@ The `verify_token()` dependency returns these errors:
 - [JWT.io - Token Inspector](https://jwt.io) (decode tokens for debugging)
 - [PyJWT Documentation](https://pyjwt.readthedocs.io/)
 - [PyJWKClient Documentation](https://pyjwt.readthedocs.io/en/stable/usage.html#retrieve-rsa-signing-keys-from-a-jwks-endpoint)
-- `backend/auth/dependencies.py` - Token verification implementation
-- `backend/config.py` - Configuration management
-- `JWT_SIGNING_KEYS_MIGRATION.md` - Migration details and technical reference
-- `.github/copilot-instructions.md` - Authentication pipeline rules
-
