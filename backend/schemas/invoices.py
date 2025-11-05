@@ -121,7 +121,12 @@ class InvoiceCommitRequest(BaseModel):
     """
     Request to commit (persist) an invoice after OCR and user confirmation.
     
-    The frontend sends the edited/confirmed data from the DRAFT response.
+    The frontend sends the edited/confirmed data from the DRAFT response,
+    along with the account and category selected by the user.
+    
+    When committed, this will:
+    - Create an invoice record
+    - Create a linked transaction record with the invoice_id reference
     """
     store_name: str = Field(..., description="Merchant/store name")
     transaction_time: str = Field(..., description="ISO-8601 datetime of purchase")
@@ -131,24 +136,131 @@ class InvoiceCommitRequest(BaseModel):
         ...,
         description="Formatted multi-line list of purchased items"
     )
-    nit: str = Field(..., description="NIT or taxpayer identification number")
     storage_path: str = Field(
         ...,
         description="Path to receipt image in Supabase Storage"
+    )
+    account_id: str = Field(
+        ...,
+        description="UUID of the account this transaction belongs to (user-selected)"
+    )
+    category_id: str = Field(
+        ...,
+        description="UUID of the expense category (user-selected or from suggestion)"
     )
 
 
 class InvoiceCommitResponse(BaseModel):
     """
-    Response after successfully persisting an invoice.
+    Response after successfully persisting an invoice and creating linked transaction.
+    
+    Returns both the invoice ID and the automatically created transaction ID.
     """
     status: Literal["COMMITTED"] = Field(
         "COMMITTED",
         description="Indicates the invoice was successfully saved"
     )
     invoice_id: str = Field(..., description="UUID of created invoice record")
+    transaction_id: str = Field(..., description="UUID of linked transaction record")
     message: str = Field(
         ...,
         description="Success message",
-        examples=["Invoice saved successfully"]
+        examples=["Invoice and transaction saved successfully"]
+    )
+
+
+# --- Retrieval endpoint models ---
+
+class InvoiceDetailResponse(BaseModel):
+    """
+    Response for GET /invoices/{invoice_id} - Single invoice details.
+    """
+    id: str = Field(..., description="Invoice UUID")
+    user_id: str = Field(..., description="Owner user UUID")
+    storage_path: str = Field(..., description="Path to receipt image in Supabase Storage")
+    extracted_text: str = Field(..., description="Canonical formatted invoice data")
+    created_at: str = Field(..., description="ISO-8601 timestamp when invoice was created")
+    updated_at: Optional[str] = Field(None, description="ISO-8601 timestamp of last update")
+
+
+class InvoiceListResponse(BaseModel):
+    """
+    Response for GET /invoices - List of user's invoices.
+    """
+    invoices: List[InvoiceDetailResponse] = Field(..., description="List of invoice records")
+    count: int = Field(..., description="Total number of invoices returned")
+    limit: int = Field(..., description="Limit used for pagination")
+    offset: int = Field(..., description="Offset used for pagination")
+
+
+# --- Update endpoint models ---
+
+class InvoiceUpdateRequest(BaseModel):
+    """
+    Request to update an existing invoice.
+    
+    All fields are optional - only provided fields will be updated.
+    The extracted_text will be automatically rebuilt in the canonical format.
+    """
+    store_name: Optional[str] = Field(
+        None,
+        description="Updated merchant/store name"
+    )
+    transaction_time: Optional[str] = Field(
+        None,
+        description="Updated ISO-8601 datetime of purchase"
+    )
+    total_amount: Optional[str] = Field(
+        None,
+        description="Updated total amount as string (e.g., '128.50')"
+    )
+    currency: Optional[str] = Field(
+        None,
+        description="Updated currency code (e.g., 'GTQ')"
+    )
+    purchased_items: Optional[str] = Field(
+        None,
+        description="Updated formatted multi-line list of purchased items"
+    )
+    storage_path: Optional[str] = Field(
+        None,
+        description="Updated path to receipt image in Supabase Storage"
+    )
+
+
+class InvoiceUpdateResponse(BaseModel):
+    """
+    Response after successfully updating an invoice.
+    """
+    status: Literal["UPDATED"] = Field(
+        "UPDATED",
+        description="Indicates the invoice was successfully updated"
+    )
+    invoice_id: str = Field(..., description="UUID of updated invoice record")
+    invoice: InvoiceDetailResponse = Field(
+        ...,
+        description="Complete updated invoice details"
+    )
+    message: str = Field(
+        ...,
+        description="Success message",
+        examples=["Invoice updated successfully"]
+    )
+
+
+# --- Delete endpoint models ---
+
+class InvoiceDeleteResponse(BaseModel):
+    """
+    Response after successfully deleting an invoice.
+    """
+    status: Literal["DELETED"] = Field(
+        "DELETED",
+        description="Indicates the invoice was successfully deleted"
+    )
+    invoice_id: str = Field(..., description="UUID of deleted invoice record")
+    message: str = Field(
+        ...,
+        description="Success message",
+        examples=["Invoice deleted successfully"]
     )

@@ -24,9 +24,9 @@ class TestFormatExtractedText:
             total_amount="128.50",
             currency="GTQ",
             purchased_items="- Leche deslactosada 1L (2x Q15.50)\n- Pan integral (1x Q12.00)",
-            nit="12345678-9"
+            storage_path="/invoices/receipt-123.jpg",
         )
-        
+
         expected = """Store Name: Super Despensa Familiar
 Transaction Time: 2025-10-30T14:32:00-06:00
 Total Amount: 128.50
@@ -34,8 +34,8 @@ Currency: GTQ
 Purchased Items:
 - Leche deslactosada 1L (2x Q15.50)
 - Pan integral (1x Q12.00)
-NIT: 12345678-9"""
-        
+Receipt Image ID: /invoices/receipt-123.jpg"""
+
         assert result == expected
     
     def test_format_extracted_text_handles_empty_items(self):
@@ -46,11 +46,11 @@ NIT: 12345678-9"""
             total_amount="50.00",
             currency="USD",
             purchased_items="",
-            nit="N/A"
+            storage_path="/receipts/none.jpg",
         )
-        
+
         assert "Store Name: Tienda Local" in result
-        assert "NIT: N/A" in result
+        assert "Receipt Image ID: /receipts/none.jpg" in result
         assert "Purchased Items:\n" in result
 
 
@@ -81,7 +81,6 @@ class TestCreateInvoice:
             total_amount="100.00",
             currency="GTQ",
             purchased_items="- Item 1 (1x Q100.00)",
-            nit="987654321"
         )
         
         # Verify Supabase calls
@@ -100,7 +99,7 @@ class TestCreateInvoice:
         assert "Store Name: Test Store" in extracted_text
         assert "Total Amount: 100.00" in extracted_text
         assert "Currency: GTQ" in extracted_text
-        assert "NIT: 987654321" in extracted_text
+        assert "Receipt Image ID: /invoices/receipt.jpg" in extracted_text
         
         # Verify result
         assert result["id"] == "invoice-uuid-123"
@@ -128,7 +127,6 @@ class TestCreateInvoice:
                 total_amount="50.00",
                 currency="GTQ",
                 purchased_items="",
-                nit="N/A"
             )
 
 
