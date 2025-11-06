@@ -56,7 +56,13 @@ async def upload_invoice_image(
     if not content_type:
         content_type, _ = mimetypes.guess_type(filename)
         if not content_type:
-            content_type = "image/jpeg"  # default fallback
+            # Fallback: Try to detect from file extension or default to jpeg
+            if filename.lower().endswith(('.png', '.PNG')):
+                content_type = "image/png"
+            elif filename.lower().endswith(('.webp', '.WEBP')):
+                content_type = "image/webp"
+            else:
+                content_type = "image/jpeg"  # default fallback
 
     # Extract file extension from original filename
     file_ext = None
@@ -67,7 +73,6 @@ async def upload_invoice_image(
         ext_map = {
             "image/jpeg": "jpg",
             "image/png": "png",
-            "image/gif": "gif",
             "image/webp": "webp",
         }
         file_ext = ext_map.get(content_type, "jpg")
