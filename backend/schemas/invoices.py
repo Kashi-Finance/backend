@@ -5,7 +5,7 @@ These models define the strict request/response contracts for invoice processing
 """
 
 from typing import List, Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # --- Item models ---
@@ -28,20 +28,73 @@ class CategorySuggestionResponse(BaseModel):
     """
     Category assignment suggestion from InvoiceAgent.
     
-    Either matches an existing category or proposes a new one.
+    INVARIANT: One of the following MUST be true:
+    - match_type="EXISTING" AND category_id is not None AND category_name is not None AND proposed_name is None
+    - match_type="NEW_PROPOSED" AND category_id is None AND category_name is None AND proposed_name is not None
+    
+    All four fields are ALWAYS present (never omitted).
+    Fields that don't apply are explicitly set to null.
+    
+    This design:
+    - Makes Flutter/frontend type-safe (no missing key checks)
+    - Enables backend validation of invariants
+    - Simplifies conditional rendering (check field nullability, not key existence)
     """
     match_type: Literal["EXISTING", "NEW_PROPOSED"] = Field(
         ...,
-        description="Whether agent matched to an existing user category or proposes a new name"
+        description="Discriminator: whether matched to existing category or proposing new one"
     )
     category_id: Optional[str] = Field(
         None,
-        description="UUID of matched category (only if match_type=EXISTING)"
+        description="UUID of matched category (non-null IF match_type=EXISTING)"
     )
-    category_name: str = Field(
-        ...,
-        description="Name of category (existing or proposed)"
+    category_name: Optional[str] = Field(
+        None,
+        description="Name of matched category (non-null IF match_type=EXISTING)"
     )
+    proposed_name: Optional[str] = Field(
+        None,
+        description="Suggested name for new category (non-null IF match_type=NEW_PROPOSED)"
+    )
+
+    @model_validator(mode="after")
+    def validate_category_invariant(self):
+        """
+        Validate that category_suggestion invariant is maintained.
+        
+        INVARIANT:
+        - If match_type="EXISTING": category_id and category_name must be non-None, proposed_name must be None
+        - If match_type="NEW_PROPOSED": proposed_name must be non-None, category_id and category_name must be None
+        """
+        match_type = self.match_type
+        category_id = self.category_id
+        category_name = self.category_name
+        proposed_name = self.proposed_name
+        
+        if match_type == "EXISTING":
+            if category_id is None or category_name is None:
+                raise ValueError(
+                    "category_suggestion invariant violated: "
+                    "match_type=EXISTING requires category_id and category_name to be non-null"
+                )
+            if proposed_name is not None:
+                raise ValueError(
+                    "category_suggestion invariant violated: "
+                    "match_type=EXISTING requires proposed_name to be null"
+                )
+        elif match_type == "NEW_PROPOSED":
+            if proposed_name is None:
+                raise ValueError(
+                    "category_suggestion invariant violated: "
+                    "match_type=NEW_PROPOSED requires proposed_name to be non-null"
+                )
+            if category_id is not None or category_name is not None:
+                raise ValueError(
+                    "category_suggestion invariant violated: "
+                    "match_type=NEW_PROPOSED requires category_id and category_name to be null"
+                )
+        
+        return self
 
 
 # --- Response models ---
@@ -85,9 +138,9 @@ class InvoiceOCRResponseDraft(BaseModel):
         description="Extracted merchant/store name",
         examples=["Super Despensa Familiar Zona 11"]
     )
-    purchase_datetime: str = Field(
+    transaction_time: str = Field(
         ...,
-        description="ISO-8601 datetime of purchase",
+        description="ISO-8601 datetime of transaction",
         examples=["2025-10-30T14:32:00-06:00"]
     )
     total_amount: float = Field(
@@ -124,21 +177,29 @@ class InvoiceCommitRequest(BaseModel):
     The frontend sends the edited/confirmed data from the DRAFT response,
     along with the account and category selected by the user.
     
+    IMPORTANT: The image is sent as base64 because it was NOT uploaded during the 
+    OCR draft phase. The backend will upload it now during commit.
+    
     When committed, this will:
-    - Create an invoice record
+    - Upload receipt image to Supabase Storage
+    - Create an invoice record with the uploaded image reference
     - Create a linked transaction record with the invoice_id reference
     """
     store_name: str = Field(..., description="Merchant/store name")
     transaction_time: str = Field(..., description="ISO-8601 datetime of purchase")
-    total_amount: str = Field(..., description="Total amount as string (e.g., '128.50')")
+    total_amount: float = Field(..., description="Total amount as number (e.g., 128.50)")
     currency: str = Field(..., description="Currency code (e.g., 'GTQ')")
     purchased_items: str = Field(
         ...,
         description="Formatted multi-line list of purchased items"
     )
-    storage_path: str = Field(
+    image_base64: str = Field(
         ...,
-        description="Path to receipt image in Supabase Storage"
+        description="Receipt image as base64 string (will be uploaded to storage)"
+    )
+    image_filename: str = Field(
+        default="receipt.jpg",
+        description="Original image filename for storage reference"
     )
     account_id: str = Field(
         ...,
@@ -193,59 +254,6 @@ class InvoiceListResponse(BaseModel):
     offset: int = Field(..., description="Offset used for pagination")
 
 
-# --- Update endpoint models ---
-
-class InvoiceUpdateRequest(BaseModel):
-    """
-    Request to update an existing invoice.
-    
-    All fields are optional - only provided fields will be updated.
-    The extracted_text will be automatically rebuilt in the canonical format.
-    """
-    store_name: Optional[str] = Field(
-        None,
-        description="Updated merchant/store name"
-    )
-    transaction_time: Optional[str] = Field(
-        None,
-        description="Updated ISO-8601 datetime of purchase"
-    )
-    total_amount: Optional[str] = Field(
-        None,
-        description="Updated total amount as string (e.g., '128.50')"
-    )
-    currency: Optional[str] = Field(
-        None,
-        description="Updated currency code (e.g., 'GTQ')"
-    )
-    purchased_items: Optional[str] = Field(
-        None,
-        description="Updated formatted multi-line list of purchased items"
-    )
-    storage_path: Optional[str] = Field(
-        None,
-        description="Updated path to receipt image in Supabase Storage"
-    )
-
-
-class InvoiceUpdateResponse(BaseModel):
-    """
-    Response after successfully updating an invoice.
-    """
-    status: Literal["UPDATED"] = Field(
-        "UPDATED",
-        description="Indicates the invoice was successfully updated"
-    )
-    invoice_id: str = Field(..., description="UUID of updated invoice record")
-    invoice: InvoiceDetailResponse = Field(
-        ...,
-        description="Complete updated invoice details"
-    )
-    message: str = Field(
-        ...,
-        description="Success message",
-        examples=["Invoice updated successfully"]
-    )
 
 
 # --- Delete endpoint models ---

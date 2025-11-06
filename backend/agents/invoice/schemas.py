@@ -3,6 +3,10 @@ InvoiceAgent JSON Schemas
 
 OpenAPI-compatible schemas for API/runtime validation.
 These mirror the TypedDict definitions in types.py exactly.
+
+NOTE: This agent is implemented as a single-shot multimodal workflow (not ADK),
+so tool declarations are not needed. These schemas are kept for documentation
+and potential future validation needs.
 """
 
 # Input schema for InvoiceAgent
@@ -17,13 +21,21 @@ INPUT_SCHEMA = {
             "type": "string",
             "description": "Reference to uploaded image in storage"
         },
+        "user_categories": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "name": {"type": "string"}
+                },
+                "required": ["id", "name"]
+            },
+            "description": "List of user's expense categories"
+        },
         "receipt_image_base64": {
             "type": "string",
-            "description": "Optional base64-encoded image data"
-        },
-        "ocr_text": {
-            "type": "string",
-            "description": "Optional pre-extracted OCR text"
+            "description": "Base64-encoded image data (REQUIRED)"
         },
         "country": {
             "type": "string",
@@ -34,7 +46,7 @@ INPUT_SCHEMA = {
             "description": "User's preferred currency (e.g., 'GTQ')"
         }
     },
-    "required": ["user_id", "receipt_image_id", "country", "currency_preference"]
+    "required": ["user_id", "receipt_image_id", "user_categories", "receipt_image_base64", "country", "currency_preference"]
 }
 
 # Output schema for InvoiceAgent
@@ -81,14 +93,24 @@ OUTPUT_SCHEMA = {
             "properties": {
                 "match_type": {
                     "type": "string",
-                    "enum": ["EXISTING", "NEW_PROPOSED"]
+                    "enum": ["EXISTING", "NEW_PROPOSED"],
+                    "description": "Discriminator: whether category exists or is newly proposed"
                 },
-                "category_id": {"type": "string"},
-                "category_name": {"type": "string"},
-                "proposed_name": {"type": "string"}
+                "category_id": {
+                    "type": ["string", "null"],
+                    "description": "UUID of existing category (non-null IF match_type=EXISTING)"
+                },
+                "category_name": {
+                    "type": ["string", "null"],
+                    "description": "Name of existing category (non-null IF match_type=EXISTING)"
+                },
+                "proposed_name": {
+                    "type": ["string", "null"],
+                    "description": "Suggested name for new category (non-null IF match_type=NEW_PROPOSED)"
+                }
             },
-            "required": ["match_type"],
-            "description": "Category assignment suggestion (present if status=DRAFT)"
+            "required": ["match_type", "category_id", "category_name", "proposed_name"],
+            "description": "Category assignment suggestion (present if status=DRAFT). INVARIANT: if match_type=EXISTING then category_id and category_name are non-null, proposed_name is null. If match_type=NEW_PROPOSED then proposed_name is non-null, category_id and category_name are null."
         },
         "extracted_text": {
             "type": "string",
@@ -100,45 +122,4 @@ OUTPUT_SCHEMA = {
         }
     },
     "required": ["status"]
-}
-
-# Gemini function declarations for the tools
-FETCH_DECLARATION = {
-    "name": "fetch",
-    "description": "Retrieve the latest ADK runtime / tool invocation spec",
-    "parameters": {
-        "type": "object",
-        "properties": {},
-        "required": []
-    }
-}
-
-GET_USER_PROFILE_DECLARATION = {
-    "name": "getUserProfile",
-    "description": "Get user's profile context (country, currency_preference, locale) for localization",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "user_id": {
-                "type": "string",
-                "description": "Authenticated user UUID (provided by backend, never from client)"
-            }
-        },
-        "required": ["user_id"]
-    }
-}
-
-GET_USER_CATEGORIES_DECLARATION = {
-    "name": "getUserCategories",
-    "description": "Get user's expense categories to build category_suggestion",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "user_id": {
-                "type": "string",
-                "description": "Authenticated user UUID (provided by backend, never from client)"
-            }
-        },
-        "required": ["user_id"]
-    }
 }

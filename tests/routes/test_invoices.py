@@ -9,7 +9,7 @@ Tests follow the requirements from .github/copilot-instructions.md:
 """
 
 import io
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -50,7 +50,6 @@ async def mock_get_user_profile(supabase_client, user_id: str):
 def mock_verify_token():
     """Override get_authenticated_user dependency and mock get_user_profile."""
     from backend.auth.dependencies import get_authenticated_user
-    from backend.routes.invoices import router
     
     # Override auth dependency in the app
     app.dependency_overrides[get_authenticated_user] = mock_get_authenticated_user_dependency
@@ -73,11 +72,49 @@ def mock_get_user_profile_fixture():
 
 
 @pytest.fixture
+def mock_get_user_categories_fixture():
+    """Mock get_user_categories to return test categories."""
+    with patch("backend.routes.invoices.get_user_categories") as mock:
+        # Return a list of test categories
+        mock.return_value = [
+            {
+                "id": "test-category-uuid",
+                "name": "Groceries",
+                "description": "Food and household items"
+            },
+            {
+                "id": "test-category-uuid-2",
+                "name": "Transportation",
+                "description": "Gas, bus, taxi, etc."
+            }
+        ]
+        yield mock
+
+
+@pytest.fixture
 def mock_get_supabase_client():
-    """Mock get_supabase_client to return a fake client."""
+    """Mock get_supabase_client to return a fake client with storage capability."""
     with patch("backend.routes.invoices.get_supabase_client") as mock:
-        # Return a mock client object
-        mock.return_value = None  # Profile service will receive this
+        # Create a mock Supabase client with storage using MagicMock
+        mock_supabase_client = MagicMock()
+        
+        # Mock the upload method to return a storage path
+        mock_supabase_client.storage.from_().upload.return_value = MagicMock(
+            data={'path': 'invoices/test-user-uuid-123/test-image.png'}
+        )
+        
+        # Set the return value to the mock client
+        mock.return_value = mock_supabase_client
+        yield mock
+
+
+@pytest.fixture
+def mock_upload_invoice_image():
+    """Mock upload_invoice_image to return a storage path."""
+    with patch("backend.routes.invoices.upload_invoice_image") as mock:
+        async def mock_upload(*args, **kwargs):
+            return "invoices/test-user-uuid-123/test-image.png"
+        mock.side_effect = mock_upload
         yield mock
 
 
@@ -193,7 +230,9 @@ class TestInvoiceOCREndpoint:
         client,
         mock_verify_token,
         mock_get_supabase_client,
+        mock_upload_invoice_image,
         mock_get_user_profile_fixture,
+        mock_get_user_categories_fixture,
         mock_invoice_agent_success,
         valid_image_bytes
     ):
@@ -225,7 +264,7 @@ class TestInvoiceOCREndpoint:
         assert data["store_name"] == "Super Test Store"
         assert data["total_amount"] == 100.50
         assert data["currency"] == "GTQ"
-        assert data["purchase_datetime"] == "2025-11-02T14:30:00Z"
+        assert data["transaction_time"] == "2025-11-02T14:30:00Z"
         
         # Validate items
         assert len(data["items"]) == 2
@@ -240,6 +279,9 @@ class TestInvoiceOCREndpoint:
         
         # Verify profile was fetched
         mock_get_user_profile_fixture.assert_called_once()
+        
+        # Verify categories were fetched
+        mock_get_user_categories_fixture.assert_called_once()
         
         # Verify Gemini client was instantiated and called
         mock_invoice_agent_success.assert_called_once()
@@ -327,7 +369,9 @@ class TestInvoiceOCREndpoint:
         client,
         mock_verify_token,
         mock_get_supabase_client,
+        mock_upload_invoice_image,
         mock_get_user_profile_fixture,
+        mock_get_user_categories_fixture,
         mock_invoice_agent_invalid,
         valid_image_bytes
     ):
@@ -360,14 +404,19 @@ class TestInvoiceOCREndpoint:
         client,
         mock_verify_token,
         mock_get_supabase_client,
+        mock_upload_invoice_image,
         mock_get_user_profile_fixture,
+        mock_get_user_categories_fixture,
         mock_invoice_agent_success,
         valid_image_bytes
     ):
         """
-        Verify that /invoices/ocr NEVER persists to database.
+        Verify that /invoices/ocr NEVER persists to database and NEVER uploads image.
         
-        This endpoint is preview-only. Persistence happens in /invoices/commit.
+        This endpoint is preview-only:
+        - Image is NOT uploaded to Supabase Storage
+        - No records are created in the database
+        - Persistence happens in /invoices/commit
         """
         response = client.post(
             "/invoices/ocr",
@@ -377,15 +426,20 @@ class TestInvoiceOCREndpoint:
         
         assert response.status_code == 200
         
-        # This is a smoke test - in reality, we'd mock DB calls and verify they're not made
-        # For now, we just verify the endpoint returns successfully without errors
-        # The actual DB layer is not implemented yet (TODO markers in code)
+        # CRITICAL: Verify that upload_invoice_image is NOT called during OCR
+        mock_upload_invoice_image.assert_not_called()
+        
+        # Verify response is DRAFT (successful extraction)
+        data = response.json()
+        assert data["status"] == "DRAFT"
     
     def test_profile_not_found_uses_defaults(
         self,
         client,
         mock_verify_token,
         mock_get_supabase_client,
+        mock_upload_invoice_image,
+        mock_get_user_categories_fixture,
         mock_invoice_agent_success,
         valid_image_bytes
     ):
@@ -427,7 +481,7 @@ class TestInvoiceOCRValidation:
         data = {
             "status": "DRAFT",
             "store_name": "Test Store",
-            "purchase_datetime": "2025-11-02T14:30:00Z",
+            "transaction_time": "2025-11-02T14:30:00Z",
             "total_amount": 100.0,
             "currency": "GTQ",
             "items": [
@@ -440,7 +494,8 @@ class TestInvoiceOCRValidation:
             "category_suggestion": {
                 "match_type": "EXISTING",
                 "category_id": "test-uuid",
-                "category_name": "Test Category"
+                "category_name": "Test Category",
+                "proposed_name": None
             }
         }
         
@@ -461,3 +516,127 @@ class TestInvoiceOCRValidation:
         validated = InvoiceOCRResponseInvalid.model_validate(data)
         assert validated.status == "INVALID_IMAGE"
         assert validated.reason == "Test reason"
+
+
+class TestInvoiceDeleteEndpoint:
+    """Tests for DELETE /invoices/{invoice_id} endpoint."""
+    
+    @pytest.fixture
+    def mock_delete_invoice(self):
+        """Mock delete_invoice service function."""
+        with patch("backend.routes.invoices.delete_invoice") as mock:
+            async def mock_delete(*args, **kwargs):
+                # Return True indicating successful deletion
+                return True
+            mock.side_effect = mock_delete
+            yield mock
+    
+    def test_delete_invoice_success_returns_deleted(
+        self,
+        client,
+        mock_verify_token,
+        mock_get_supabase_client,
+        mock_delete_invoice
+    ):
+        """
+        HAPPY PATH: Deleting existing invoice returns DELETED response.
+        """
+        response = client.delete(
+            "/invoices/test-invoice-uuid-123",
+            headers={"Authorization": "Bearer fake-test-token"}
+        )
+        
+        # Should return 200 OK
+        assert response.status_code == 200
+        
+        # Parse response
+        data = response.json()
+        
+        # Validate response structure
+        assert data["status"] == "DELETED"
+        assert data["invoice_id"] == "test-invoice-uuid-123"
+        assert data["message"] == "Invoice deleted successfully"
+        
+        # Verify service was called
+        mock_delete_invoice.assert_called_once()
+    
+    def test_delete_nonexistent_invoice_returns_404(
+        self,
+        client,
+        mock_verify_token,
+        mock_get_supabase_client
+    ):
+        """
+        FAILURE PATH: Attempting to delete non-existent invoice returns 404.
+        """
+        with patch("backend.routes.invoices.delete_invoice") as mock:
+            async def mock_not_found(*args, **kwargs):
+                return False  # Indicates deletion failed (invoice not found)
+            mock.side_effect = mock_not_found
+            
+            response = client.delete(
+                "/invoices/nonexistent-invoice-uuid",
+                headers={"Authorization": "Bearer fake-test-token"}
+            )
+            
+            # Should return 404 Not Found
+            assert response.status_code == 404
+            
+            data = response.json()
+            assert data["detail"]["error"] == "not_found"
+    
+    def test_delete_invoice_missing_auth_returns_401(
+        self,
+        client
+    ):
+        """
+        FAILURE PATH: Missing Authorization header returns 401.
+        """
+        response = client.delete(
+            "/invoices/test-invoice-uuid-123"
+            # Missing Authorization header
+        )
+        
+        # Should return 401 Unauthorized
+        assert response.status_code == 401
+    
+    def test_delete_invoice_owned_by_another_user_returns_404(
+        self,
+        client,
+        mock_verify_token,
+        mock_get_supabase_client
+    ):
+        """
+        SECURITY TEST: User cannot delete another user's invoice (RLS).
+        
+        When a user tries to delete an invoice belonging to another user,
+        the RLS policy silently rejects it, and service returns False.
+        """
+        with patch("backend.routes.invoices.delete_invoice") as mock:
+            async def mock_access_denied(*args, **kwargs):
+                return False  # RLS prevents access; deletion "fails"
+            mock.side_effect = mock_access_denied
+            
+            response = client.delete(
+                "/invoices/another-users-invoice-uuid",
+                headers={"Authorization": "Bearer fake-test-token"}
+            )
+            
+            # Should return 404 (not 403) to avoid leaking information about other users' data
+            assert response.status_code == 404
+
+
+    def test_delete_response_schema_validates_correctly(self):
+        """Test that InvoiceDeleteResponse validates sample data."""
+        from backend.schemas.invoices import InvoiceDeleteResponse
+        
+        data = {
+            "status": "DELETED",
+            "invoice_id": "test-invoice-uuid",
+            "message": "Invoice deleted successfully"
+        }
+        
+        # Should validate without errors
+        validated = InvoiceDeleteResponse.model_validate(data)
+        assert validated.status == "DELETED"
+        assert validated.invoice_id == "test-invoice-uuid"

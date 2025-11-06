@@ -24,7 +24,6 @@ class TestFormatExtractedText:
             total_amount="128.50",
             currency="GTQ",
             purchased_items="- Leche deslactosada 1L (2x Q15.50)\n- Pan integral (1x Q12.00)",
-            storage_path="/invoices/receipt-123.jpg",
         )
 
         expected = """Store Name: Super Despensa Familiar
@@ -33,8 +32,7 @@ Total Amount: 128.50
 Currency: GTQ
 Purchased Items:
 - Leche deslactosada 1L (2x Q15.50)
-- Pan integral (1x Q12.00)
-Receipt Image ID: /invoices/receipt-123.jpg"""
+- Pan integral (1x Q12.00)"""
 
         assert result == expected
     
@@ -46,12 +44,10 @@ Receipt Image ID: /invoices/receipt-123.jpg"""
             total_amount="50.00",
             currency="USD",
             purchased_items="",
-            storage_path="/receipts/none.jpg",
         )
 
         assert "Store Name: Tienda Local" in result
-        assert "Receipt Image ID: /receipts/none.jpg" in result
-        assert "Purchased Items:\n" in result
+        assert "Purchased Items:" in result
 
 
 class TestCreateInvoice:
@@ -99,7 +95,7 @@ class TestCreateInvoice:
         assert "Store Name: Test Store" in extracted_text
         assert "Total Amount: 100.00" in extracted_text
         assert "Currency: GTQ" in extracted_text
-        assert "Receipt Image ID: /invoices/receipt.jpg" in extracted_text
+        assert "Transaction Time: 2025-11-02T12:00:00Z" in extracted_text
         
         # Verify result
         assert result["id"] == "invoice-uuid-123"

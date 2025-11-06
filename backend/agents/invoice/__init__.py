@@ -4,7 +4,7 @@ InvoiceAgent Package
 Modular InvoiceAgent implementation for extracting structured data from receipts.
 
 This package provides a complete invoice OCR and extraction pipeline using
-Google Gemini with function calling. The agent can:
+Google Gemini with a single-shot LLM call. The agent can:
 - Extract store name, transaction time, total amount, currency
 - Parse individual line items with quantities and prices
 - Suggest category assignments based on user's existing categories
@@ -12,9 +12,9 @@ Google Gemini with function calling. The agent can:
 
 Main Components:
 - types: TypedDict definitions for structured data
-- tools: Backend helper functions (profile, categories, ADK spec)
-- schemas: JSON schemas for validation and Gemini function declarations
-- prompts: System prompts and tool documentation
+- tools: Backend helper functions (profile, categories) - called by endpoint
+- schemas: JSON schemas for validation
+- prompts: System prompts for the LLM
 - agent: Main runner function that orchestrates Gemini interaction
 
 Usage:
@@ -23,6 +23,7 @@ Usage:
     result = run_invoice_agent(
         user_id="user-uuid-from-auth",
         receipt_image_id="img-123",
+        user_categories=categories_list,
         receipt_image_base64=encoded_image,
         country="GT",
         currency_preference="GTQ"
@@ -37,19 +38,14 @@ from backend.agents.invoice.types import (
     InvoiceAgentOutput,
 )
 from backend.agents.invoice.tools import (
-    fetch_adk_spec,
     get_user_profile,
     get_user_categories,
 )
 from backend.agents.invoice.schemas import (
     INPUT_SCHEMA,
     OUTPUT_SCHEMA,
-    FETCH_DECLARATION,
-    GET_USER_PROFILE_DECLARATION,
-    GET_USER_CATEGORIES_DECLARATION,
 )
 from backend.agents.invoice.prompts import (
-    TOOLS_DOCUMENTATION,
     INVOICE_AGENT_SYSTEM_PROMPT,
 )
 
@@ -62,16 +58,11 @@ __all__ = [
     "InvoiceAgentInput",
     "InvoiceAgentOutput",
     # Tools
-    "fetch_adk_spec",
     "get_user_profile",
     "get_user_categories",
     # Schemas
     "INPUT_SCHEMA",
     "OUTPUT_SCHEMA",
-    "FETCH_DECLARATION",
-    "GET_USER_PROFILE_DECLARATION",
-    "GET_USER_CATEGORIES_DECLARATION",
     # Prompts
-    "TOOLS_DOCUMENTATION",
     "INVOICE_AGENT_SYSTEM_PROMPT",
 ]

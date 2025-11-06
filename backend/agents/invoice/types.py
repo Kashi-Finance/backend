@@ -29,7 +29,6 @@ class InvoiceAgentInput(TypedDict):
     user_id: str  # Authenticated user (from Supabase Auth, never from client)
     receipt_image_id: str  # Reference to uploaded image in storage
     receipt_image_base64: Optional[str]  # Base64-encoded image data (if available)
-    ocr_text: Optional[str]  # Pre-extracted OCR text (optional)
     country: str  # User's country (from getUserCountry or getUserProfile)
     currency_preference: str  # User's preferred currency (from getUserProfile)
 
