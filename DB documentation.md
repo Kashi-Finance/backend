@@ -71,6 +71,16 @@ Profiles are not physically deleted while the user exists in `auth_users`.
 If a user requests “delete profile,” the backend must perform an update instead — clearing or anonymizing personal fields (`first_name`, `last_name`, `avatar_url`, etc.) while keeping the row for internal consistency (country, currency preferences, etc.).  
 The record must remain because it provides localization data to other agents.
 
+**Foreign keys & delete constraints:**
+
+- Outgoing: profile.user_id → auth.users(id) ON DELETE CASCADE
+- Incoming: none (no other table references profile directly).
+
+**Impact of related table deletions on profile:**
+
+- If the parent auth.users record is deleted: profile row is deleted automatically (ON DELETE CASCADE).
+- Deleting profile does not cascade to other business tables; all others reference auth.users directly.
+
 ---
 
 ## 💳 Table: `account`
@@ -99,8 +109,7 @@ The record must remain because it provides localization data to other agents.
 
 - We **never** store a `balance` column. The effective balance is computed from `transaction` rows (sum of income minus sum of outcome) for that account.
 
-
-**Delete rule:**  
+**Delete rule:**
 
 An account cannot just “disappear”. The backend must handle all `transaction` rows that reference that account **before** deleting it.  
 There are two allowed flows. The app will explicitly ask the user which one they want:
@@ -122,6 +131,18 @@ There are two allowed flows. The app will explicitly ask the user which one they
 3. If for policy/audit reasons the system is not allowed to delete certain transactions (for example, locked records in the future), the delete must fail.
 
 In both options, the backend must enforce that the account being deleted belongs to the authenticated user.
+
+**Foreign keys & delete constraints:**
+
+- Outgoing: account.user_id → auth.users(id) ON DELETE CASCADE
+- Incoming:
+    - transaction.account_id → account(id) ON DELETE CASCADE
+    - recurring_transaction.account_id → account(id) ON DELETE CASCADE
+
+**Impact of related table deletions on account:**
+
+- Deleting auth.users record deletes all related accounts and their transactions automatically.
+- Deleting an account cascades to delete all transactions and recurring_transaction rows referencing it.
 
 ---
 
@@ -156,7 +177,7 @@ In both options, the backend must enforce that the account being deleted belongs
 - `outcome` — for `outcome` transactions
 - `income` — for `income` transactions
 
-**Delete rule:**  
+**Delete rule:**
 
 When a user requests to delete a category:
 
@@ -164,6 +185,21 @@ When a user requests to delete a category:
 2. After no transactions reference the deleted category, it can safely be removed.
 3. Any `budget_category` rows referencing this category must also be removed.  
     System categories (`user_id IS NULL`, `key` present) can never be deleted.
+
+**Foreign keys & delete constraints:**
+
+- Outgoing: category.user_id → auth.users(id) ON DELETE CASCADE
+- Incoming:
+    - transaction.category_id → category(id) ON DELETE RESTRICT
+    - budget_category.category_id → category(id) ON DELETE CASCADE
+    - recurring_transaction.category_id → category(id) ON DELETE SET NULL
+
+**Impact of related table deletions on category:**
+
+- Deleting auth.users record deletes all personal categories (ON DELETE CASCADE).
+- Deleting a category deletes related budget_category rows (ON DELETE CASCADE).
+- Related recurring_transaction rows set category_id to NULL (ON DELETE SET NULL).
+- Attempting to delete a category still used by transactions fails (ON DELETE RESTRICT).
 
 ---
 
@@ -196,6 +232,17 @@ When deleting an invoice:
 2. Only after transactions are handled can the invoice be deleted.
 3. The backend must also remove the associated file from Supabase Storage using `storage_path` before deleting the database row.  
     No record or file should remain orphaned.
+
+**Foreign keys & delete constraints:**
+
+- Outgoing: invoice.user_id → auth.users(id) ON DELETE CASCADE
+- Incoming:
+    - transaction.invoice_id → invoice(id) ON DELETE SET NULL
+
+**Impact of related table deletions on invoice:**
+
+- Deleting auth.users record deletes invoices (ON DELETE CASCADE) and clears invoice_id in transactions (ON DELETE SET NULL).
+- Deleting invoice sets invoice_id to NULL in referencing transactions.
 
 ---
 
@@ -243,6 +290,25 @@ When a transaction is deleted:
 3. If linked to an invoice, the invoice is **not** automatically deleted; however, if no other transactions reference it, the system may remove the invoice following the `invoice` delete rule.  
     All deletions should maintain accounting integrity and prevent broken links.
 
+**Foreign keys & delete constraints:**
+
+- Outgoing:
+    - transaction.user_id → auth.users(id) ON DELETE CASCADE
+    - transaction.account_id → account(id) ON DELETE CASCADE
+    - transaction.category_id → category(id) ON DELETE RESTRICT
+    - transaction.invoice_id → invoice(id) ON DELETE SET NULL
+    - transaction.paired_transaction_id → transaction(id) ON DELETE SET NULL
+- Incoming:
+    - transaction.paired_transaction_id (self-reference)
+
+**Impact of related table deletions on transaction:**
+
+- Deleting auth.users record deletes all transactions (ON DELETE CASCADE).
+- Deleting related account deletes its transactions (ON DELETE CASCADE).
+- Deleting related invoice clears invoice_id (ON DELETE SET NULL).
+- Deleting related category blocked by RESTRICT until reassignment.
+- Deleting paired transaction clears paired_transaction_id (ON DELETE SET NULL).
+
 ---
 
 ## 📆 Table: `budget`
@@ -284,6 +350,16 @@ Before deleting a budget:
 2. After those relations are cleared, the budget can be deleted.  
     Deleting a budget never removes any historical transactions; those remain as financial history.
 
+**Foreign keys & delete constraints:**
+
+- Outgoing: budget.user_id → auth.users(id) ON DELETE CASCADE
+- Incoming: budget_category.budget_id → budget(id) ON DELETE CASCADE
+
+**Impact of related table deletions on budget:**
+
+- Deleting auth.users record deletes budgets (ON DELETE CASCADE) and their links (budget_category).
+- Deleting a budget cascades to remove related budget_category rows.
+
 ---
 
 ## 🪙 Table: `budget_category`
@@ -305,6 +381,17 @@ Before deleting a budget:
 Deleting a `budget_category` record only removes the link between a budget and a category.  
 It does not delete the `budget`, the `category`, or any transactions.  
 However, if the related `category` or `budget` is deleted, the backend must automatically delete this linking row to maintain referential integrity.
+
+**Foreign keys & delete constraints:**
+
+- Outgoing:
+    - budget_category.budget_id → budget(id) ON DELETE CASCADE
+    - budget_category.category_id → category(id) ON DELETE CASCADE
+    - budget_category.user_id → auth.users(id) ON DELETE CASCADE
+
+**Impact of related table deletions on budget_category:**
+
+- Deleting budget, category, or user deletes corresponding budget_category rows automatically.
 
 ---
 
@@ -355,6 +442,20 @@ When deleting a recurring rule:
 1. The record can be deleted safely without touching past generated transactions.
 2. If it has a paired rule (`paired_recurring_transaction_id`), that reference must be deleted together.
 3. Deleting the rule stops any future auto-generation of transactions but preserves existing financial records.
+
+**Foreign keys & delete constraints:**
+
+- Outgoing:
+    - recurring_transaction.user_id → auth.users(id) ON DELETE CASCADE
+    - recurring_transaction.account_id → account(id) ON DELETE CASCADE
+    - recurring_transaction.category_id → category(id) ON DELETE SET NULL
+    - recurring_transaction.paired_recurring_transaction_id → recurring_transaction(id) ON DELETE SET NULL
+
+**Impact of related table deletions on recurring_transaction:**
+
+- Deleting auth.users or account deletes recurring_transaction rows (ON DELETE CASCADE).
+- Deleting category sets category_id to NULL (ON DELETE SET NULL).
+- Deleting paired rule clears paired_recurring_transaction_id (ON DELETE SET NULL).
 
 ---
 
@@ -418,6 +519,16 @@ When deleting a recurring rule:
 
 Deleting a `wishlist` also requires deleting its dependent `wishlist_item` rows first (or rely on ON DELETE CASCADE). After cleanup, the `wishlist` can be safely removed.
 
+**Foreign keys & delete constraints:**
+
+- Outgoing: wishlist.user_id → auth.users(id) ON DELETE CASCADE
+- Incoming: wishlist_item.wishlist_id → wishlist(id) ON DELETE CASCADE
+
+**Impact of related table deletions on wishlist:**
+
+- Deleting auth.users deletes all wishlists and their wishlist_items (ON DELETE CASCADE).
+- Deleting a wishlist cascades to remove its wishlist_items.
+
 ---
 
 ## 🛍 Table: wishlist_item
@@ -473,6 +584,15 @@ When a `wishlist_item` is requested to be deleted, the backend service must fo
    A `wishlist` with zero `wishlist_item` rows is still valid and may later receive new items.
 4.  If the parent `wishlist` is deleted, all its associated `wishlist_item` rows are automatically removed due to the **`ON DELETE CASCADE`** foreign key constraint on `wishlist_item.wishlist_id`.
 5. The Recommendation Agent must never trigger automatic deletions of `wishlist_item` entries unless explicitly requested by the user (e.g., “Remove this saved offer”).
+
+**Foreign keys & delete constraints:**
+
+- Outgoing: wishlist_item.wishlist_id → wishlist(id) ON DELETE CASCADE
+
+**Impact of related table deletions on wishlist_item:**
+
+- Deleting wishlist deletes its wishlist_item rows (ON DELETE CASCADE).
+- Deleting auth.users deletes wishlists and cascades down to wishlist_items.
 
 ---
 
