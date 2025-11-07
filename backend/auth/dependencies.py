@@ -129,12 +129,16 @@ async def verify_token(authorization: Annotated[str | None, Header()] = None) ->
         
         # Decode and verify the JWT token
         # Supabase now uses ES256 (ECC P-256) for signing
+        # Supabase tokens use an issuer that includes the /auth/v1 path, e.g.
+        #  https://<project>.supabase.co/auth/v1
+        issuer = f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1"
+
         payload = decode(
             token,
             signing_key.key,  # Public key from JWKS
             algorithms=["ES256"],  # ECC P-256 asymmetric algorithm
             audience="authenticated",  # Supabase uses 'authenticated' as the audience
-            issuer=settings.SUPABASE_URL,  # Verify the token is from our project
+            issuer=issuer,  # Verify the token is from our project
             options={
                 "verify_signature": True,
                 "verify_exp": True,
@@ -239,12 +243,14 @@ async def get_authenticated_user(
         jwks_client = get_jwks_client()
         signing_key = jwks_client.get_signing_key_from_jwt(token)
         
+        issuer = f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1"
+
         payload = decode(
             token,
             signing_key.key,
             algorithms=["ES256"],
             audience="authenticated",
-            issuer=settings.SUPABASE_URL,
+            issuer=issuer,
             options={
                 "verify_signature": True,
                 "verify_exp": True,
