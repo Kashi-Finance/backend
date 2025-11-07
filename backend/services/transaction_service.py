@@ -319,7 +319,7 @@ async def delete_transaction(
     """
     Delete a transaction record.
 
-    This function implements the delete rules from DB documentation:
+    This function:
     1. Checks that the transaction exists and belongs to the user
     2. If paired (transfer), clears the pair reference or removes both
     3. If linked to invoice, does NOT delete the invoice
@@ -361,21 +361,16 @@ async def delete_transaction(
     if paired_id:
         logger.info(
             f"Transaction {transaction_id} is paired with {paired_id}. "
-            f"Clearing pair reference before deletion."
+            f"Deleting both transactions (transfer)."
         )
-        # Clear the pair reference in the paired transaction
+        # Use transfer service to delete both sides
+        from backend.services.transfer_service import delete_transfer
         try:
-            await update_transaction(
-                supabase_client=supabase_client,
-                user_id=user_id,
-                transaction_id=paired_id,
-                # Set paired_transaction_id to None by updating with explicit null
-                # Note: Supabase client might need special handling for null values
-            )
+            await delete_transfer(supabase_client, user_id, transaction_id)
+            return True
         except Exception as e:
-            logger.warning(
-                f"Failed to clear pair reference in transaction {paired_id}: {e}"
-            )
+            logger.error(f"Failed to delete paired transfer: {e}")
+            raise
 
     logger.info(f"Deleting transaction {transaction_id} for user {user_id}")
 
