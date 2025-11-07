@@ -10,6 +10,7 @@ Each profile is 1:1 with an auth.users record.
 import logging
 from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, status
+from postgrest.exceptions import APIError
 
 from backend.auth.dependencies import get_authenticated_user, AuthenticatedUser
 from backend.db.client import get_supabase_client
@@ -17,12 +18,14 @@ from backend.services import (
     get_user_profile,
     update_user_profile,
     delete_user_profile,
+    create_user_profile,
 )
 from backend.schemas.profile import (
     ProfileResponse,
     ProfileUpdateRequest,
     ProfileUpdateResponse,
     ProfileDeleteResponse,
+    ProfileCreateRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -258,6 +261,77 @@ async def update_profile(
                 "error": "update_error",
                 "details": "Failed to update profile"
             }
+        )
+
+
+@router.post(
+    "",
+    response_model=ProfileResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create user profile",
+    description="Create a profile for the authenticated user."
+)
+async def create_profile(
+    request: ProfileCreateRequest,
+    auth_user: Annotated[AuthenticatedUser, Depends(get_authenticated_user)]
+) -> ProfileResponse:
+    """
+    Create the authenticated user's profile.
+    """
+    logger.info(f"Creating profile for user {auth_user.user_id}")
+
+    supabase_client = get_supabase_client(auth_user.access_token)
+
+    try:
+        created = await create_user_profile(
+            supabase_client=supabase_client,
+            user_id=auth_user.user_id,
+            first_name=request.first_name,
+            currency_preference=request.currency_preference,
+            country=request.country,
+            last_name=request.last_name,
+            avatar_url=request.avatar_url,
+            locale=request.locale or "system",
+        )
+
+        # Helper to coerce optional DB values into strings for required fields
+        def _as_str(val: Any) -> str:
+            return str(val) if val is not None else ""
+
+        return ProfileResponse(
+            user_id=_as_str(created.get("user_id")),
+            first_name=_as_str(created.get("first_name")),
+            last_name=created.get("last_name") if created.get("last_name") is not None else None,
+            avatar_url=created.get("avatar_url") if created.get("avatar_url") is not None else None,
+            currency_preference=_as_str(created.get("currency_preference")),
+            locale=_as_str(created.get("locale")),
+            country=_as_str(created.get("country")),
+            created_at=_as_str(created.get("created_at")),
+            updated_at=_as_str(created.get("updated_at")),
+        )
+
+    except APIError as e:
+        # Handle database constraint violations (e.g. duplicate key)
+        if e.code == "23505":  # unique_violation
+            logger.warning(f"Profile already exists for user {auth_user.user_id}")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "profile_exists",
+                    "details": "Profile already exists for this user. Use PATCH /profile to update it."
+                }
+            )
+        # Re-raise other APIErrors as 500
+        logger.error(f"Database error creating profile for user {auth_user.user_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "create_error", "details": "Failed to create profile"}
+        )
+    except Exception as e:
+        logger.error(f"Failed to create profile for user {auth_user.user_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "create_error", "details": "Failed to create profile"}
         )
 
 

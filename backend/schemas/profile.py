@@ -83,6 +83,21 @@ class ProfileUpdateRequest(BaseModel):
     )
 
 
+class ProfileCreateRequest(BaseModel):
+    """
+    Request to create a new user profile.
+
+    Required fields: first_name, currency_preference, country
+    Optional: last_name, avatar_url, locale
+    """
+    first_name: str = Field(..., min_length=1, max_length=100)
+    last_name: Optional[str] = Field(None, max_length=100)
+    avatar_url: Optional[str] = Field(None)
+    currency_preference: str = Field(..., description="Preferred currency (ISO code)")
+    locale: Optional[str] = Field("system", description="Locale preference")
+    country: str = Field(..., min_length=2, max_length=2, description="ISO-2 country code")
+
+
 class ProfileUpdateResponse(BaseModel):
     """
     Response after successfully updating profile.
