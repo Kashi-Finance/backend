@@ -8,7 +8,15 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.routes.accounts import router as accounts_router
+from backend.routes.budgets import router as budgets_router
+from backend.routes.categories import router as categories_router
 from backend.routes.invoices import router as invoices_router
+from backend.routes.transactions import router as transactions_router
+from backend.routes.profile import router as profile_router
+from backend.routes.recurring_transactions import router as recurring_transactions_router
+from backend.routes.recurring_transactions import sync_router as recurring_sync_router
+from backend.routes.transfers import router as transfers_router
 
 # Configure logging
 logging.basicConfig(
@@ -37,7 +45,15 @@ app.add_middleware(
 )
 
 # Register routers
+app.include_router(accounts_router)
+app.include_router(budgets_router)
+app.include_router(categories_router)
 app.include_router(invoices_router)
+app.include_router(transactions_router)
+app.include_router(profile_router)
+app.include_router(recurring_transactions_router)
+app.include_router(recurring_sync_router)
+app.include_router(transfers_router)
 
 # Health check endpoint
 @app.get("/health", tags=["system"])

@@ -32,6 +32,9 @@ class Settings:
     # Google Gemini API
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
     
+    # Supabase Storage Configuration
+    SUPABASE_STORAGE_BUCKET: str = os.getenv("SUPABASE_STORAGE_BUCKET", "invoices")
+    
     # Application Settings
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
