@@ -2148,27 +2148,28 @@ Transfers represent internal money movements between the user's own accounts. Ea
 
 **Normal Transfers (One-time):**
 - Created via `POST /transfers`
-- Generates 2 paired `transaction` records:
-  - One **outcome** transaction from source account
-  - One **income** transaction to destination account
+- Returns 2 transaction records (same schema as `/transactions`)
+- Array index 0: **outcome** transaction from source account
+- Array index 1: **income** transaction to destination account
 - Both transactions use the system category with key `transfer`
 - Both reference each other via `paired_transaction_id` field
 
 **Recurring Transfers:**
 - Created via `POST /transfers/recurring`
-- Generates 2 paired `recurring_transaction` rules:
-  - One **outcome** template for source account
-  - One **income** template for destination account
+- Returns 2 recurring_transaction records (same schema as `/recurring-transactions`)
+- Array index 0: **outcome** template for source account
+- Array index 1: **income** template for destination account
 - Both rules use the system category with key `from_recurrent_transaction`
 - Both reference each other via `paired_recurring_transaction_id` field
 - Sync generates paired transactions automatically on schedule
 
-**Key Rules:**
-1. **Atomicity:** Both sides created together or neither
-2. **Symmetric Deletion:** Deleting one side deletes both automatically
-3. **Same User:** Both accounts must belong to the authenticated user
-4. **Paired IDs:** All responses include both transaction/rule IDs for transparency
-5. **System Categories:** Transfers use dedicated system categories, not user categories
+**Key Benefits:**
+1. **Same Schema:** Frontend uses `TransactionDetailResponse` for regular transactions and `RecurringTransactionResponse` for recurring rules
+2. **Unified Handling:** Transfers are just regular transactions with a `paired_transaction_id` set
+3. **Atomicity:** Both sides created together or neither
+4. **Symmetric Deletion:** Deleting one side deletes both automatically
+5. **Same User:** Both accounts must belong to the authenticated user
+6. **System Categories:** Transfers use dedicated system categories, not user categories
 
 ---
 
@@ -2201,21 +2202,44 @@ Transfers represent internal money movements between the user's own accounts. Ea
 3. Creates outcome transaction from source account
 4. Creates income transaction to destination account
 5. Links both via `paired_transaction_id` (symmetric)
-6. Returns both transaction IDs
+6. Returns both transaction records as an array
 
 **Response:**
+Returns an array of two transaction objects (same schema as `/transactions`). The first transaction is the outcome (money leaving source account), the second is the income (money entering destination account).
+
 ```json
 {
   "status": "CREATED",
-  "transfer": {
-    "from_transaction_id": "txn-uuid-out",
-    "to_transaction_id": "txn-uuid-in",
-    "from_account_id": "acct-uuid-source",
-    "to_account_id": "acct-uuid-destination",
-    "amount": 500.00,
-    "date": "2025-11-03",
-    "description": "Monthly savings transfer"
-  },
+  "transactions": [
+    {
+      "id": "txn-uuid-out",
+      "user_id": "user-uuid",
+      "account_id": "acct-uuid-source",
+      "category_id": "cat-uuid-transfer",
+      "invoice_id": null,
+      "flow_type": "outcome",
+      "amount": 500.00,
+      "date": "2025-11-03T00:00:00Z",
+      "description": "Monthly savings transfer",
+      "paired_transaction_id": "txn-uuid-in",
+      "created_at": "2025-11-03T10:15:00Z",
+      "updated_at": "2025-11-03T10:15:00Z"
+    },
+    {
+      "id": "txn-uuid-in",
+      "user_id": "user-uuid",
+      "account_id": "acct-uuid-destination",
+      "category_id": "cat-uuid-transfer",
+      "invoice_id": null,
+      "flow_type": "income",
+      "amount": 500.00,
+      "date": "2025-11-03T00:00:00Z",
+      "description": "Monthly savings transfer",
+      "paired_transaction_id": "txn-uuid-out",
+      "created_at": "2025-11-03T10:15:00Z",
+      "updated_at": "2025-11-03T10:15:00Z"
+    }
+  ],
   "message": "Transfer created successfully"
 }
 ```
@@ -2282,29 +2306,56 @@ Transfers represent internal money movements between the user's own accounts. Ea
 5. Creates income recurring rule for destination account
 6. Links both via `paired_recurring_transaction_id` (symmetric)
 7. Sets `next_run_date = start_date` for both rules
-8. Returns both rule IDs
+8. Returns both recurring rule records as an array (same schema as `/recurring-transactions`)
 
 **Response:**
+Returns an array of two recurring transaction objects. The first is the outcome rule (money leaving source account), the second is the income rule (money entering destination account).
+
 ```json
 {
   "status": "CREATED",
-  "recurring_transfer": {
-    "outgoing_rule_id": "rule-uuid-out",
-    "incoming_rule_id": "rule-uuid-in",
-    "from_account_id": "acct-uuid-source",
-    "to_account_id": "acct-uuid-destination",
-    "amount": 500.00,
-    "description_outgoing": "Monthly savings withdrawal",
-    "description_incoming": "Monthly savings deposit",
-    "frequency": "monthly",
-    "interval": 1,
-    "by_monthday": [5],
-    "start_date": "2025-11-05",
-    "next_run_date": "2025-11-05",
-    "end_date": null,
-    "is_active": true,
-    "created_at": "2025-11-03T10:00:00Z"
-  },
+  "recurring_transactions": [
+    {
+      "id": "rule-uuid-out",
+      "user_id": "user-uuid",
+      "account_id": "acct-uuid-source",
+      "category_id": "cat-uuid-transfer",
+      "flow_type": "outcome",
+      "amount": 500.00,
+      "description": "Monthly savings withdrawal",
+      "paired_recurring_transaction_id": "rule-uuid-in",
+      "frequency": "monthly",
+      "interval": 1,
+      "by_weekday": null,
+      "by_monthday": [5],
+      "start_date": "2025-11-05",
+      "next_run_date": "2025-11-05",
+      "end_date": null,
+      "is_active": true,
+      "created_at": "2025-11-03T10:00:00Z",
+      "updated_at": "2025-11-03T10:00:00Z"
+    },
+    {
+      "id": "rule-uuid-in",
+      "user_id": "user-uuid",
+      "account_id": "acct-uuid-destination",
+      "category_id": "cat-uuid-transfer",
+      "flow_type": "income",
+      "amount": 500.00,
+      "description": "Monthly savings deposit",
+      "paired_recurring_transaction_id": "rule-uuid-out",
+      "frequency": "monthly",
+      "interval": 1,
+      "by_weekday": null,
+      "by_monthday": [5],
+      "start_date": "2025-11-05",
+      "next_run_date": "2025-11-05",
+      "end_date": null,
+      "is_active": true,
+      "created_at": "2025-11-03T10:00:00Z",
+      "updated_at": "2025-11-03T10:00:00Z"
+    }
+  ],
   "message": "Recurring transfer created successfully"
 }
 ```
