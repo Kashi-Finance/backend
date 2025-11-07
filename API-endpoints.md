@@ -204,7 +204,7 @@ Use in frontend:
 * `201 CREATED` - Profile created successfully
 * `400 BAD REQUEST` - Invalid request data (missing required fields)
 * `401 UNAUTHORIZED` - Missing or invalid authentication token
-* `409 CONFLICT` - Profile already exists for this user (optional behavior)
+* `409 CONFLICT` - Profile already exists for this user (use PATCH /profile to update)
 * `500 INTERNAL SERVER ERROR` - Database persistence error
 
 **Security:**
