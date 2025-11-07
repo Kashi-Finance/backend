@@ -152,31 +152,12 @@ async def process_invoice_ocr(
         f"size={len(image_bytes)} bytes"
     )
     
-    
-    # Upload image to Supabase Storage and get real storage_path
+    # Create authenticated Supabase client for profile and categories
     supabase_client = get_supabase_client(auth_user.access_token)
     
-    try:
-        storage_path = await upload_invoice_image(
-            supabase_client=supabase_client,
-            user_id=user_id,
-            image_bytes=image_bytes,
-            filename=image.filename or "receipt.jpg",
-            content_type=image.content_type
-        )
-        logger.info(f"Image uploaded to storage: {storage_path}")
-    except Exception as e:
-        logger.error(f"Failed to upload image to storage: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={
-                "error": "storage_error",
-                "details": "Failed to upload receipt image to storage"
-            }
-        )
-    
-    # Encode image as base64 for agent
-    image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+    # NOTE: Image will NOT be uploaded to storage during OCR (draft phase).
+    # Upload happens ONLY when user confirms via /invoices/commit endpoint.
+    # We do NOT pass storage_path to the agent because the image doesn't exist in storage yet.
     
     # Fetch user profile for country and currency_preference
     # This allows the InvoiceAgent to provide localized extraction
@@ -202,7 +183,7 @@ async def process_invoice_ocr(
     
     # Fetch user's categories for the agent
     try:
-        user_categories = get_user_categories(user_id)
+        user_categories = get_user_categories(supabase_client, user_id)
     except Exception as e:
         logger.error(f"Error fetching user categories: {e}", exc_info=True)
         # If we can't fetch categories, provide empty list rather than failing
@@ -213,7 +194,6 @@ async def process_invoice_ocr(
     try:
         agent_output = run_invoice_agent(
             user_id=user_id,
-            receipt_image_id=storage_path,  # Use the actual storage path as receipt ID
             user_categories=user_categories,
             receipt_image_base64=image_base64,
             country=country,
@@ -280,14 +260,22 @@ async def process_invoice_ocr(
             logger.debug("Agent returned missing or invalid category_suggestion; defaulting to NEW_PROPOSED")
             match_type = "NEW_PROPOSED"
 
-        # Determine a safe category_name: prefer explicit category_name, then proposed_name, then a fallback
-        category_name = cs.get("category_name") or cs.get("proposed_name") or "Uncategorized"
-
-        category_suggestion = CategorySuggestionResponse(
-            match_type=match_type,
-            category_id=cs.get("category_id"),
-            category_name=category_name,
-        )
+        # Build category_suggestion with all 4 fields (some may be null depending on match_type)
+        # Invariant: EXISTING has category_id + category_name, NEW_PROPOSED has proposed_name
+        if match_type == "EXISTING":
+            category_suggestion = CategorySuggestionResponse(
+                match_type="EXISTING",
+                category_id=cs.get("category_id"),
+                category_name=cs.get("category_name"),
+                proposed_name=None
+            )
+        else:  # NEW_PROPOSED
+            category_suggestion = CategorySuggestionResponse(
+                match_type="NEW_PROPOSED",
+                category_id=None,
+                category_name=None,
+                proposed_name=cs.get("proposed_name") or "Uncategorized"
+            )
 
         # Ensure required top-level fields are present; if any are missing, treat as INVALID_IMAGE
         store_name = agent_output.get("store_name")
@@ -323,7 +311,7 @@ async def process_invoice_ocr(
         return InvoiceOCRResponseDraft(
             status="DRAFT",
             store_name=store_name,
-            purchase_datetime=purchase_datetime,
+            transaction_time=purchase_datetime,
             total_amount=total_amount,
             currency=currency,
             items=items,
@@ -402,12 +390,12 @@ async def commit_invoice(
             }
         )
     
-    if not request.storage_path.strip():
+    if not request.image_base64.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "error": "invalid_request",
-                "details": "storage_path cannot be empty"
+                "details": "image_base64 cannot be empty"
             }
         )
     
@@ -420,12 +408,48 @@ async def commit_invoice(
     # Create authenticated Supabase client (RLS enforced)
     supabase_client = get_supabase_client(auth_user.access_token)
     
+    # --- UPLOAD IMAGE TO STORAGE (only happens on commit) ---
+    try:
+        # Decode base64 to bytes
+        try:
+            image_bytes = base64.b64decode(request.image_base64)
+        except Exception as e:
+            logger.error(f"Failed to decode base64 image: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "invalid_image_base64",
+                    "details": "Could not decode image_base64 field"
+                }
+            )
+        
+        # Upload image to Supabase Storage
+        storage_path = await upload_invoice_image(
+            supabase_client=supabase_client,
+            user_id=auth_user.user_id,
+            image_bytes=image_bytes,
+            filename=request.image_filename,
+            content_type="image/jpeg"  # Will be detected/overridden by upload_invoice_image
+        )
+        logger.info(f"Image uploaded to storage: {storage_path}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to upload image to storage: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "storage_error",
+                "details": "Failed to upload receipt image to storage"
+            }
+        )
+    
     try:
         # Persist invoice to database
         created_invoice = await create_invoice(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
-            storage_path=request.storage_path,
+            storage_path=storage_path,  # Use the uploaded storage path
             store_name=request.store_name,
             transaction_time=request.transaction_time,
             total_amount=request.total_amount,
