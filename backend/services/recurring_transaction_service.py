@@ -6,7 +6,7 @@ synchronizing them to generate actual transactions.
 """
 
 import logging
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, cast
 from datetime import date
 
 logger = logging.getLogger(__name__)
@@ -256,52 +256,34 @@ async def delete_recurring_transaction(
         RLS enforces user_id = auth.uid() on delete
     """
     logger.info(f"Deleting recurring transaction {recurring_transaction_id} for user {user_id}")
-    
-    # First, fetch the rule to check for paired rule
-    rule = await get_recurring_transaction_by_id(
-        supabase_client, user_id, recurring_transaction_id
-    )
-    
-    if not rule:
-        logger.warning(f"Recurring transaction {recurring_transaction_id} not found or not accessible")
-        return False, False
-    
-    paired_rule_id = rule.get("paired_recurring_transaction_id")
-    paired_rule_deleted = False
-    
-    # Delete the main rule
-    delete_result = supabase_client.table("recurring_transaction") \
-        .delete() \
-        .eq("id", recurring_transaction_id) \
-        .eq("user_id", user_id) \
-        .execute()
-    
-    if not delete_result.data or len(delete_result.data) == 0:
-        logger.error(f"Failed to delete recurring transaction {recurring_transaction_id}")
-        return False, False
-    
-    # If there's a paired rule, delete it too (DB rule #2)
-    if paired_rule_id:
-        logger.info(f"Deleting paired recurring transaction {paired_rule_id}")
-        
-        paired_delete_result = supabase_client.table("recurring_transaction") \
-            .delete() \
-            .eq("id", paired_rule_id) \
-            .eq("user_id", user_id) \
-            .execute()
-        
-        if paired_delete_result.data and len(paired_delete_result.data) > 0:
-            paired_rule_deleted = True
-            logger.info(f"Paired recurring transaction {paired_rule_id} deleted")
-        else:
-            logger.warning(f"Failed to delete paired recurring transaction {paired_rule_id}")
-    
-    logger.info(
-        f"Recurring transaction {recurring_transaction_id} deleted. "
-        f"Paired rule deleted: {paired_rule_deleted}"
-    )
-    
-    return True, paired_rule_deleted
+
+    # Use DB RPC to atomically delete the rule and its paired rule (if owned by same user)
+    try:
+        rpc_res = supabase_client.rpc(
+            "delete_recurring_and_pair",
+            {
+                "p_recurring_id": recurring_transaction_id,
+                "p_user_id": user_id,
+            },
+        ).execute()
+
+        data = getattr(rpc_res, "data", None)
+        if not isinstance(data, list) or len(data) == 0:
+            logger.warning(f"RPC delete_recurring_and_pair returned no rows for {recurring_transaction_id}")
+            return False, False
+
+        row = cast(Dict[str, Any], data[0])
+        success = bool(row.get("success") or False)
+        paired_deleted = bool(row.get("paired_deleted") or False)
+
+        logger.info(
+            f"Recurring transaction {recurring_transaction_id} deletion via RPC: success={success}, paired_deleted={paired_deleted}"
+        )
+
+        return success, paired_deleted
+    except Exception as e:
+        logger.error(f"Failed to delete recurring transaction via RPC for {recurring_transaction_id}: {e}", exc_info=True)
+        raise
 
 
 async def sync_recurring_transactions(
