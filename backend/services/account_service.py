@@ -191,6 +191,7 @@ async def delete_account_with_reassignment(
     """
     Delete account by reassigning all transactions to another account.
     
+    Uses RPC function `delete_account_reassign` for atomic operation.
     This implements DB delete rule Option 1:
     1. Reassign all transactions to target_account_id
     2. Delete the account
@@ -205,65 +206,42 @@ async def delete_account_with_reassignment(
         Number of transactions reassigned
     
     Raises:
-        ValueError: If target account doesn't exist or doesn't belong to user
-        Exception: If reassignment or deletion fails
+        ValueError: If accounts are invalid or validation fails
+        Exception: If RPC call fails
     
     Security:
-        - RLS enforces user_id = auth.uid()
-        - Validates target account belongs to same user
+        - RPC validates both accounts belong to user_id
+        - All operations happen atomically in DB
     """
     logger.info(
         f"Deleting account {account_id} with reassignment to {target_account_id} "
         f"for user {user_id}"
     )
     
-    # Verify target account exists and belongs to user
-    target_account = await get_account_by_id(supabase_client, user_id, target_account_id)
-    if not target_account:
-        raise ValueError(
-            f"Target account {target_account_id} not found or doesn't belong to user"
-        )
+    # Call RPC function for atomic delete with reassignment
+    result = supabase_client.rpc(
+        'delete_account_reassign',
+        {
+            'p_account_id': account_id,
+            'p_user_id': user_id,
+            'p_target_account_id': target_account_id
+        }
+    ).execute()
     
-    # Get count of transactions to reassign
-    count_result = (
-        supabase_client.table("transaction")
-        .select("id", count=cast(Any, "exact"))
-        .eq("account_id", account_id)
-        .eq("user_id", user_id)
-        .execute()
+    if not result.data or not isinstance(result.data, list) or len(result.data) == 0:
+        raise Exception("RPC delete_account_reassign failed: no data returned")
+    
+    rpc_result = cast(Dict[str, Any], result.data[0])
+    transaction_count = int(rpc_result.get('transactions_reassigned', 0))
+    account_deleted = bool(rpc_result.get('account_deleted', False))
+    
+    if not account_deleted:
+        raise Exception(f"Account {account_id} was not deleted")
+    
+    logger.info(
+        f"Account {account_id} deleted via RPC after reassigning "
+        f"{transaction_count} transactions"
     )
-
-    transaction_count = getattr(count_result, "count", 0) or 0
-    logger.info(f"Found {transaction_count} transactions to reassign")
-    
-    # Reassign all transactions
-    if transaction_count > 0:
-        reassign_result = (
-            supabase_client.table("transaction")
-            .update({"account_id": target_account_id})
-            .eq("account_id", account_id)
-            .eq("user_id", user_id)
-            .execute()
-        )
-        
-        if not reassign_result.data:
-            raise Exception("Failed to reassign transactions")
-        
-        logger.info(f"Reassigned {transaction_count} transactions")
-    
-    # Delete the account
-    delete_result = (
-        supabase_client.table("account")
-        .delete()
-        .eq("id", account_id)
-        .eq("user_id", user_id)
-        .execute()
-    )
-    
-    if not delete_result.data or len(delete_result.data) == 0:
-        raise Exception("Failed to delete account")
-    
-    logger.info(f"Account {account_id} deleted successfully after reassigning {transaction_count} transactions")
     
     return transaction_count
 
@@ -276,13 +254,11 @@ async def delete_account_with_transactions(
     """
     Delete account by deleting all related transactions.
     
+    Uses RPC function `delete_account_cascade` for atomic operation.
     This implements DB delete rule Option 2:
     1. Delete all transactions for this account
     2. Handle paired transfers (clear paired_transaction_id)
     3. Delete the account
-    
-    Note: Invoice cleanup is deferred - invoices linked only to deleted
-    transactions may become orphaned and should be handled separately.
     
     Args:
         supabase_client: Authenticated Supabase client
@@ -293,70 +269,39 @@ async def delete_account_with_transactions(
         Number of transactions deleted
     
     Raises:
-        Exception: If transaction deletion or account deletion fails
+        Exception: If RPC call fails
     
     Security:
-        - RLS enforces user_id = auth.uid()
-        - Only deletes user's own transactions and account
+        - RPC validates account belongs to user_id
+        - All operations happen atomically in DB
     """
     logger.info(
         f"Deleting account {account_id} with all transactions for user {user_id}"
     )
     
-    # Get all transactions for this account
-    transactions_result = (
-        supabase_client.table("transaction")
-        .select("id, paired_transaction_id")
-        .eq("account_id", account_id)
-        .eq("user_id", user_id)
-        .execute()
+    # Call RPC function for atomic delete with cascade
+    result = supabase_client.rpc(
+        'delete_account_cascade',
+        {
+            'p_account_id': account_id,
+            'p_user_id': user_id
+        }
+    ).execute()
+    
+    if not result.data or not isinstance(result.data, list) or len(result.data) == 0:
+        raise Exception("RPC delete_account_cascade failed: no data returned")
+    
+    rpc_result = cast(Dict[str, Any], result.data[0])
+    transaction_count = int(rpc_result.get('transactions_deleted', 0))
+    paired_refs_cleared = int(rpc_result.get('paired_references_cleared', 0))
+    account_deleted = bool(rpc_result.get('account_deleted', False))
+    
+    if not account_deleted:
+        raise Exception(f"Account {account_id} was not deleted")
+    
+    logger.info(
+        f"Account {account_id} deleted via RPC after removing {transaction_count} "
+        f"transactions (cleared {paired_refs_cleared} paired references)"
     )
-    
-    transactions = cast(List[Dict[str, Any]], transactions_result.data) if transactions_result.data else []
-    transaction_count = len(transactions)
-    logger.info(f"Found {transaction_count} transactions to delete")
-    
-    # Handle paired transfers - clear references
-    paired_ids = [
-        t.get("paired_transaction_id")
-        for t in transactions
-        if t.get("paired_transaction_id")
-    ]
-    
-    if paired_ids:
-        logger.info(f"Clearing {len(paired_ids)} paired transaction references")
-        # Clear paired_transaction_id for transactions that reference our transactions
-        supabase_client.table("transaction").update(
-            {"paired_transaction_id": None}
-        ).in_("paired_transaction_id", [t.get("id") for t in transactions]).execute()
-    
-    # Delete all transactions
-    if transaction_count > 0:
-        delete_txn_result = (
-            supabase_client.table("transaction")
-            .delete()
-            .eq("account_id", account_id)
-            .eq("user_id", user_id)
-            .execute()
-        )
-        
-        if not delete_txn_result.data:
-            raise Exception("Failed to delete transactions")
-        
-        logger.info(f"Deleted {transaction_count} transactions")
-    
-    # Delete the account
-    delete_result = (
-        supabase_client.table("account")
-        .delete()
-        .eq("id", account_id)
-        .eq("user_id", user_id)
-        .execute()
-    )
-    
-    if not delete_result.data or len(delete_result.data) == 0:
-        raise Exception("Failed to delete account")
-    
-    logger.info(f"Account {account_id} deleted successfully after removing {transaction_count} transactions")
     
     return transaction_count
