@@ -1706,7 +1706,7 @@ This endpoint follows the deletion rule:
 
 ---
 
-## 10. Recurring Transactions
+## 6. Recurring Transactions
 
 Recurring transaction endpoints manage rules that automatically generate transactions at scheduled intervals. These are used for:
 - Recurring bills (rent, utilities, subscriptions)
@@ -2138,7 +2138,7 @@ Recurring transaction endpoints manage rules that automatically generate transac
 
 ---
 
-## 11. Transfers (Internal Money Movements)
+## 7. Transfers (Internal Money Movements)
 
 Transfers represent internal money movements between the user's own accounts. Each transfer consists of **two paired transactions** (one outcome, one income) that are created, updated, and deleted together atomically.
 
@@ -2386,10 +2386,460 @@ Returns an array of two recurring transaction objects. The first is the outcome 
 
 ---
 
-## 12. Security / RLS expectations
+## 8. Wishlists (Purchase Goals)
+
+Wishlists represent **user purchase goals** (what they want to buy). Each wishlist can have 0 to many **wishlist_items**, which are specific store options selected from the recommendation flow.
+
+### Conceptual Model
+
+- **`wishlist`** = the GOAL or "meta" the user wants to achieve
+  - Fields: `goal_title`, `budget_hint`, `currency_code`, `target_date`, `preferred_store`, `user_note`, `status`
+  - A wishlist CAN exist with zero items
+  - Status: `'active' | 'purchased' | 'abandoned'`
+
+- **`wishlist_item`** = a CONCRETE store option saved by the user
+  - Fields: `product_title`, `price_total`, `seller_name`, `url`, `pickup_available`, `warranty_info`, `copy_for_user`, `badges`
+  - Items are ONLY created when the user explicitly selects options
+  - Never created automatically
+
+---
+
+### `GET /wishlists`
+
+**Purpose:** List all wishlists for the authenticated user.
+
+**Request:** No body. Query parameters for pagination.
+
+**Query Parameters:**
+- `limit` (int, optional, default 50, max 100): Maximum number of wishlists to return
+- `offset` (int, optional, default 0): Number of wishlists to skip
+
+**Behavior:**
+- Returns all user's wishlist goals
+- Ordered by creation date (newest first)
+- Only accessible to owner (RLS enforced)
+- Supports pagination
+
+**Response:**
+```json
+{
+  "wishlists": [
+    {
+      "id": "wlst-3c12f4f0-9a02-4f8a-9a8d-12ab34cd56ef",
+      "user_id": "38f7d540-23fa-497a-8df2-3ab9cbe13da5",
+      "goal_title": "Laptop para diseño gráfico que no sobrecaliente",
+      "budget_hint": "7000.00",
+      "currency_code": "GTQ",
+      "target_date": "2025-12-20",
+      "preferred_store": "Prefer Intelaf Zone 9",
+      "user_note": "No RGB lights, minimalist design",
+      "status": "active",
+      "created_at": "2025-10-31T14:00:00-06:00",
+      "updated_at": "2025-10-31T14:00:00-06:00"
+    }
+  ],
+  "count": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+**Status Codes:**
+- `200 OK` - Wishlists retrieved successfully
+- `401 UNAUTHORIZED` - Missing or invalid authentication token
+- `500 INTERNAL SERVER ERROR` - Database query error
+
+---
+
+### `POST /wishlists`
+
+**Purpose:** Create a new wishlist (goal) with optional selected items.
+
+**This endpoint supports THREE frontend scenarios:**
+
+**CASE A - Manual save (no recommendations)**
+- User fills wizard and clicks "Save my goal" without requesting recommendations
+- `selected_items` is omitted or empty
+- Only wishlist is created (no items)
+
+**CASE B - Recommendations requested but none selected**
+- User requests recommendations, reviews options, but doesn't select any
+- `selected_items` is omitted or empty
+- Only wishlist is created (no items)
+
+**CASE C - Recommendations requested and 1-3 selected**
+- User requests recommendations, reviews options, and selects 1-3 offers
+- `selected_items` contains the selected offers (from FormatterAgent output)
+- Wishlist is created AND wishlist_item rows are inserted
+
+**Request:**
+```json
+{
+  "goal_title": "Laptop Ryzen 7, 16GB RAM, SSD 512GB, 15 pulgadas",
+  "budget_hint": 7000.00,
+  "currency_code": "GTQ",
+  "target_date": "2025-12-20",
+  "preferred_store": "Prefer Intelaf Zone 9",
+  "user_note": "No RGB lights, minimalist design",
+  "selected_items": [
+    {
+      "product_title": "HP Envy Ryzen 7 16GB RAM 512GB SSD 15.6\"",
+      "price_total": 6200.00,
+      "seller_name": "ElectroCentro Guatemala",
+      "url": "https://electrocentro.gt/hp-envy-ryzen7",
+      "pickup_available": true,
+      "warranty_info": "HP 12-month warranty",
+      "copy_for_user": "Recommended for graphic design. Meets Ryzen 7 & 16GB RAM specs. ~Q100 cheaper than others.",
+      "badges": ["Cheapest", "12m Warranty", "Pickup Today"]
+    }
+  ]
+}
+```
+
+**Request Field Details:**
+
+Required core fields:
+- `goal_title` (string, 1-500 chars): User's goal description
+- `budget_hint` (decimal, > 0): Maximum budget
+- `currency_code` (string, 3 chars, ISO format): Currency code
+
+Optional context fields:
+- `target_date` (date, nullable): Target date for goal
+- `preferred_store` (string, nullable, max 200 chars): Store preference
+- `user_note` (string, nullable, max 1000 chars): User notes/restrictions
+
+Optional selection from recommendations:
+- `selected_items` (array, nullable, max 3 items): Store options selected from recommendation flow
+  - Each item must have: `product_title`, `price_total`, `seller_name`, `url`, `pickup_available`, `warranty_info`, `copy_for_user`, `badges` (max 3)
+
+**Behavior:**
+- All operations are ATOMIC (everything succeeds or everything rolls back)
+- `user_id` always comes from authenticated token, never from request body
+- If `selected_items` is omitted/empty → CASE A/B (no items created)
+- If `selected_items` has 1-3 items → CASE C (wishlist + items created)
+- Validates: `budget_hint > 0`, `badges.length <= 3`, `selected_items.length <= 3`
+
+**Response:**
+```json
+{
+  "status": "CREATED",
+  "wishlist": {
+    "id": "wlst-3c12f4f0-9a02-4f8a-9a8d-12ab34cd56ef",
+    "user_id": "38f7d540-23fa-497a-8df2-3ab9cbe13da5",
+    "goal_title": "Laptop Ryzen 7, 16GB RAM, SSD 512GB, 15 pulgadas",
+    "budget_hint": "7000.00",
+    "currency_code": "GTQ",
+    "target_date": "2025-12-20",
+    "preferred_store": "Prefer Intelaf Zone 9",
+    "user_note": "No RGB lights, minimalist design",
+    "status": "active",
+    "created_at": "2025-10-31T14:00:00-06:00",
+    "updated_at": "2025-10-31T14:00:00-06:00"
+  },
+  "items_created": 1,
+  "message": "Wishlist created successfully with 1 saved offer"
+}
+```
+
+**Status Codes:**
+- `201 CREATED` - Wishlist created successfully
+- `400 BAD REQUEST` - Invalid request data (validation error)
+- `401 UNAUTHORIZED` - Missing or invalid authentication token
+- `500 INTERNAL SERVER ERROR` - Database persistence error
+
+**Message Examples:**
+- `"Wishlist created successfully (no offers selected)"` - CASE A/B
+- `"Wishlist created successfully with 1 saved offer"` - CASE C (1 item)
+- `"Wishlist created successfully with 2 saved offers"` - CASE C (2 items)
+
+---
+
+### `GET /wishlists/{wishlist_id}`
+
+**Purpose:** Retrieve details of a single wishlist with all its saved items.
+
+**Path Parameters:**
+- `wishlist_id` (UUID): Wishlist identifier
+
+**Behavior:**
+- Returns wishlist goal details + all wishlist_item rows (0-N)
+- Only accessible to owner (RLS enforced)
+- Returns 404 if wishlist doesn't exist or belongs to another user
+
+**Response:**
+```json
+{
+  "wishlist": {
+    "id": "wlst-3c12f4f0-9a02-4f8a-9a8d-12ab34cd56ef",
+    "user_id": "38f7d540-23fa-497a-8df2-3ab9cbe13da5",
+    "goal_title": "Laptop Ryzen 7, 16GB RAM, SSD 512GB",
+    "budget_hint": "7000.00",
+    "currency_code": "GTQ",
+    "target_date": "2025-12-20",
+    "preferred_store": "Prefer Intelaf Zone 9",
+    "user_note": "No RGB lights",
+    "status": "active",
+    "created_at": "2025-10-31T14:00:00-06:00",
+    "updated_at": "2025-10-31T14:00:00-06:00"
+  },
+  "items": [
+    {
+      "id": "wi-772a8b7d-1292-4ab3-bca1-8e40b7cbebcb",
+      "wishlist_id": "wlst-3c12f4f0-9a02-4f8a-9a8d-12ab34cd56ef",
+      "product_title": "HP Envy Ryzen 7 16GB RAM 512GB SSD 15.6\"",
+      "price_total": "6200.00",
+      "seller_name": "ElectroCentro Guatemala",
+      "url": "https://electrocentro.gt/hp-envy-ryzen7",
+      "pickup_available": true,
+      "warranty_info": "HP 12-month warranty",
+      "copy_for_user": "Recommended for graphic design. Meets specs. ~Q100 cheaper.",
+      "badges": ["Cheapest", "12m Warranty", "Pickup Today"],
+      "created_at": "2025-10-31T14:05:00-06:00",
+      "updated_at": "2025-10-31T14:05:00-06:00"
+    }
+  ]
+}
+```
+
+**Status Codes:**
+- `200 OK` - Wishlist retrieved successfully
+- `401 UNAUTHORIZED` - Missing or invalid authentication token
+- `404 NOT FOUND` - Wishlist not found or not accessible
+- `500 INTERNAL SERVER ERROR` - Database query error
+
+---
+
+### `GET /wishlists/{wishlist_id}/items`
+
+**Purpose:** Retrieve just the saved items for a wishlist (without wishlist goal details).
+
+**Path Parameters:**
+- `wishlist_id` (UUID): Wishlist identifier
+
+**Query Parameters:**
+- `limit` (int, optional, default 50, max 100): Maximum items to return
+- `offset` (int, optional, default 0): Number of items to skip (pagination)
+
+**Behavior:**
+- Returns array of wishlist_item rows (0-N items) for the wishlist
+- Only accessible to owner (RLS enforced)
+- Returns empty array if wishlist has no items
+- Returns 404 if wishlist doesn't exist or belongs to another user
+- Ordered by creation date (newest first)
+
+**Response (items only, no wishlist goal details):**
+```json
+[
+  {
+    "id": "wi-772a8b7d-1292-4ab3-bca1-8e40b7cbebcb",
+    "wishlist_id": "wlst-3c12f4f0-9a02-4f8a-9a8d-12ab34cd56ef",
+    "product_title": "HP Envy Ryzen 7 16GB RAM 512GB SSD 15.6\"",
+    "price_total": "6200.00",
+    "seller_name": "ElectroCentro Guatemala",
+    "url": "https://electrocentro.gt/hp-envy-ryzen7",
+    "pickup_available": true,
+    "warranty_info": "HP 12-month warranty",
+    "copy_for_user": "Recommended for graphic design. Meets specs. ~Q100 cheaper.",
+    "badges": ["Cheapest", "12m Warranty", "Pickup Today"],
+    "created_at": "2025-10-31T14:05:00-06:00",
+    "updated_at": "2025-10-31T14:05:00-06:00"
+  },
+  {
+    "id": "wi-2ba3d47f-5e1c-4d2a-8f9b-3c5a6b7e8d9f",
+    "wishlist_id": "wlst-3c12f4f0-9a02-4f8a-9a8d-12ab34cd56ef",
+    "product_title": "Lenovo ThinkPad Ryzen 7 16GB RAM 512GB SSD",
+    "price_total": "5900.00",
+    "seller_name": "Zone 9 Tech",
+    "url": "https://zone9tech.com/thinkpad-ryzen",
+    "pickup_available": false,
+    "warranty_info": "Lenovo 12-month + 3-year accidental damage",
+    "copy_for_user": "Best value option with extended warranty.",
+    "badges": ["Best Value"],
+    "created_at": "2025-10-31T13:50:00-06:00",
+    "updated_at": "2025-10-31T13:50:00-06:00"
+  }
+]
+```
+
+**Use Cases:**
+- Fetch items independently from wishlist goal details
+- Carousel/gallery view of saved offers without reloading goal info
+- Pagination for wishlists with many saved options
+- Mobile app can fetch items on-demand when user scrolls to "items" tab
+
+**Status Codes:**
+- `200 OK` - Items retrieved successfully (may return empty array if no items)
+- `401 UNAUTHORIZED` - Missing or invalid authentication token
+- `404 NOT FOUND` - Wishlist not found or not accessible
+- `500 INTERNAL SERVER ERROR` - Database query error
+
+---
+
+### `PATCH /wishlists/{wishlist_id}`
+
+**Purpose:** Update wishlist details.
+
+**Path Parameters:**
+- `wishlist_id` (UUID): Wishlist identifier
+
+**Request (all fields optional, at least one required):**
+```json
+{
+  "goal_title": "Updated goal title",
+  "budget_hint": 8000.00,
+  "currency_code": "USD",
+  "target_date": "2026-01-15",
+  "preferred_store": "Any online store",
+  "user_note": "Updated preferences",
+  "status": "purchased"
+}
+```
+
+**Behavior:**
+- Accepts partial updates (only provided fields are updated)
+- Cannot add/remove items via this endpoint (use item-specific endpoints)
+- Returns complete updated wishlist
+- Only owner can update (RLS enforced)
+
+**Response:**
+```json
+{
+  "status": "UPDATED",
+  "wishlist": {
+    "id": "wlst-3c12f4f0-9a02-4f8a-9a8d-12ab34cd56ef",
+    "user_id": "38f7d540-23fa-497a-8df2-3ab9cbe13da5",
+    "goal_title": "Updated goal title",
+    "budget_hint": "8000.00",
+    "currency_code": "USD",
+    "target_date": "2026-01-15",
+    "preferred_store": "Any online store",
+    "user_note": "Updated preferences",
+    "status": "purchased",
+    "created_at": "2025-10-31T14:00:00-06:00",
+    "updated_at": "2025-11-07T15:30:00-06:00"
+  },
+  "message": "Wishlist updated successfully"
+}
+```
+
+**Status Codes:**
+- `200 OK` - Wishlist updated successfully
+- `400 BAD REQUEST` - Invalid request (no fields provided or validation error)
+- `401 UNAUTHORIZED` - Missing or invalid authentication token
+- `404 NOT FOUND` - Wishlist not found or not accessible
+- `500 INTERNAL SERVER ERROR` - Database update error
+
+---
+
+### `DELETE /wishlists/{wishlist_id}`
+
+**Purpose:** Delete a wishlist and all its items (CASCADE).
+
+**Path Parameters:**
+- `wishlist_id` (UUID): Wishlist identifier
+
+**Behavior:**
+- Deletes wishlist row
+- All wishlist_item rows deleted automatically (ON DELETE CASCADE per DB rules)
+- Only owner can delete (RLS enforced)
+
+**Response:**
+```json
+{
+  "status": "DELETED",
+  "message": "Wishlist deleted successfully. 2 items removed.",
+  "items_deleted": 2
+}
+```
+
+**Status Codes:**
+- `200 OK` - Wishlist deleted successfully
+- `401 UNAUTHORIZED` - Missing or invalid authentication token
+- `500 INTERNAL SERVER ERROR` - Database deletion error
+
+**Message Examples:**
+- `"Wishlist deleted successfully (no items)."` - 0 items deleted
+- `"Wishlist deleted successfully. 1 item removed."` - 1 item deleted
+- `"Wishlist deleted successfully. 2 items removed."` - 2+ items deleted
+
+---
+
+### `DELETE /wishlists/{wishlist_id}/items/{item_id}`
+
+**Purpose:** Delete a single wishlist item.
+
+**Path Parameters:**
+- `wishlist_id` (UUID): Parent wishlist identifier
+- `item_id` (UUID): Wishlist item identifier
+
+**Behavior:**
+- Deletes specific item
+- Parent wishlist remains unaffected
+- Wishlist can have zero items after deletion
+- Verifies wishlist ownership before allowing deletion
+- Returns 404 if item or wishlist doesn't exist
+
+**Response:**
+```json
+{
+  "status": "DELETED",
+  "message": "Wishlist item deleted successfully"
+}
+```
+
+**Status Codes:**
+- `200 OK` - Item deleted successfully
+- `401 UNAUTHORIZED` - Missing or invalid authentication token
+- `404 NOT FOUND` - Wishlist or item not found
+- `500 INTERNAL SERVER ERROR` - Database deletion error
+
+---
+
+### Wishlist Business Rules
+
+**Creation:**
+- Wishlist can be created without any items (manual save flow)
+- Items can only be added during creation via `selected_items` field
+- Cannot add items after creation (user must create new wishlist or use recommendations flow again)
+
+**Deletion:**
+- Deleting wishlist cascades to all items (ON DELETE CASCADE)
+- Deleting individual items doesn't affect parent wishlist
+- Wishlist can exist with zero items
+
+**Status Management:**
+- `active`: Goal is still being pursued
+- `purchased`: Goal has been achieved
+- `abandoned`: User no longer interested
+
+**RLS:**
+- All wishlists and items protected by `user_id = auth.uid()`
+- Users can only see/modify their own goals and items
+
+**Integration with Recommendations:**
+- Wishlist fields (`goal_title`, `budget_hint`, `preferred_store`, `user_note`) come from wizard input
+- `selected_items` come from RecommendationCoordinatorAgent → SearchAgent → FormatterAgent output
+- Frontend coordinates the flow: wizard → recommendations → final save with selections
+
+### Frontend Flow
+
+The frontend supports a multi-screen wizard:
+
+1. User fills goal details (`goal_title`, `budget_hint`, optional `target_date`, `preferred_store`, `user_note`)
+2. At final screen, user chooses one of two branches:
+   - **Branch A**: "Save my goal" WITHOUT recommendations → call `POST /wishlists` with no `selected_items`
+   - **Branch B**: "Get recommendations" → call `/recommendations/query` first
+     - Review up to 3 options
+     - Then call `POST /wishlists` with 0-3 `selected_items`
+
+**IMPORTANT:** Nothing is persisted until the user explicitly saves at the end.
+
+---
+
+## 9. Security / RLS expectations
 
 * Every request runs as the currently authenticated user (token in `Authorization` header).
-* Row-Level Security in Supabase enforces `user_id = auth.uid()` for all user-owned rows (`account`, `transaction`, `invoice`, `budget`, `recurring_transaction`, `wishlist_item`, etc.).
+* Row-Level Security in Supabase enforces `user_id = auth.uid()` for all user-owned rows (`account`, `transaction`, `invoice`, `budget`, `recurring_transaction`, `wishlist`, `wishlist_item`, etc.).
 * Global rows (example: global categories) are readable but not editable by normal users.
 
 The backend is responsible for:
@@ -2399,7 +2849,7 @@ The backend is responsible for:
 
 ---
 
-## 13. Summary checklist for frontend devs
+## 10. Summary checklist for frontend devs
 
 Boot / session:
 * Read saved token from secure storage.
