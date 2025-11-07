@@ -24,6 +24,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Run static type check
+        run: |
+          pip install mypy
+          mypy backend
+
       - name: Install backend deps
         run: |
           if [ -f requirements.txt ]; then
