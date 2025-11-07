@@ -1424,15 +1424,21 @@ These map to the `budget` table and its join table to categories (`budget_catego
       "categories": [
         {
           "id": "category-uuid-1",
+          "user_id": "user-uuid",
+          "key": null,
           "name": "Groceries",
           "flow_type": "outcome",
-          "key": null
+          "created_at": "2025-10-01T00:00:00Z",
+          "updated_at": "2025-10-01T00:00:00Z"
         },
         {
           "id": "category-uuid-2",
+          "user_id": "user-uuid",
+          "key": null,
           "name": "Restaurants",
           "flow_type": "outcome",
-          "key": null
+          "created_at": "2025-11-01T10:00:00Z",
+          "updated_at": "2025-11-05T14:30:00Z"
         }
       ],
       "created_at": "2025-11-03T10:15:00Z",
@@ -1445,7 +1451,8 @@ These map to the `budget` table and its join table to categories (`budget_catego
 
 **Response Fields:**
 - `categories`: Array of categories linked to this budget via `budget_category` table
-  - Each category includes: `id`, `name`, `flow_type`, `key` (null for user categories)
+ - `categories`: Array of full category records linked to this budget via `budget_category` table
+  - Each category returns every field from the `category` record as stored in the DB (for example: `id`, `user_id`, `key`, `name`, `flow_type`, `created_at`, `updated_at`, plus any additional fields). 
   - Empty array if no categories linked
   - Categories can be system categories (with `key` field) or user-created (key is null)
 
@@ -1508,15 +1515,21 @@ These map to the `budget` table and its join table to categories (`budget_catego
     "categories": [
       {
         "id": "category-uuid-1",
+        "user_id": "user-uuid",
+        "key": null,
         "name": "Groceries",
         "flow_type": "outcome",
-        "key": null
+        "created_at": "2025-10-01T00:00:00Z",
+        "updated_at": "2025-10-01T00:00:00Z"
       },
       {
         "id": "category-uuid-2",
+        "user_id": "user-uuid",
+        "key": null,
         "name": "Restaurants",
         "flow_type": "outcome",
-        "key": null
+        "created_at": "2025-11-01T10:00:00Z",
+        "updated_at": "2025-11-05T14:30:00Z"
       }
     ],
     "created_at": "2025-11-03T10:15:00Z",
@@ -1568,15 +1581,21 @@ These map to the `budget` table and its join table to categories (`budget_catego
   "categories": [
     {
       "id": "category-uuid-1",
+      "user_id": "user-uuid",
+      "key": null,
       "name": "Groceries",
       "flow_type": "outcome",
-      "key": null
+      "created_at": "2025-10-01T00:00:00Z",
+      "updated_at": "2025-10-01T00:00:00Z"
     },
     {
       "id": "category-uuid-2",
+      "user_id": "user-uuid",
+      "key": null,
       "name": "Restaurants",
       "flow_type": "outcome",
-      "key": null
+      "created_at": "2025-11-01T10:00:00Z",
+      "updated_at": "2025-11-05T14:30:00Z"
     }
   ],
   "created_at": "2025-11-03T10:15:00Z",
