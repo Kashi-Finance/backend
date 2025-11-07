@@ -199,67 +199,84 @@ async def create_wishlist(
         f"items={len(selected_items) if selected_items else 0}"
     )
     
-    # Step 1: Create wishlist
-    wishlist_data = {
-        "user_id": user_id,
-        "goal_title": goal_title,
-        "budget_hint": _normalize_numeric_12_2(budget_hint),  # NUMERIC(12,2)
-        "currency_code": currency_code,
-        "target_date": target_date,
-        "preferred_store": preferred_store,
-        "user_note": user_note,
-        "status": "active"
-    }
-    
-    result = supabase_client.table("wishlist").insert(wishlist_data).execute()
-    
-    if not result.data or len(result.data) == 0:
-        raise Exception("Failed to create wishlist: no data returned")
-    
-    created_wishlist: Dict[str, Any] = cast(Dict[str, Any], result.data[0])
-    wishlist_id = created_wishlist["id"]
-    logger.info(f"Wishlist created successfully: {wishlist_id}")
-    
-    # Step 2: Create items if provided
-    items_created = 0
-    
+    # RPC for atomic creation ONLY when items are present
+    # Otherwise, simple insert is sufficient (no atomicity needed for single row)
     if selected_items and len(selected_items) > 0:
-        logger.info(f"Creating {len(selected_items)} items for wishlist {wishlist_id}")
+        logger.info(f"Using RPC for atomic wishlist+items creation ({len(selected_items)} items)")
         
-        # Prepare item rows
-        item_rows = []
+        # Prepare items as JSONB array for RPC
+        items_jsonb = []
         for item in selected_items:
-            item_row = {
-                "wishlist_id": wishlist_id,
+            item_jsonb = {
                 "product_title": item["product_title"],
-                # Normalize price_total to NUMERIC(12,2)
                 "price_total": _normalize_numeric_12_2(item["price_total"]),
                 "seller_name": item["seller_name"],
-                "url": str(item["url"]),  # Convert HttpUrl to string
+                "url": str(item["url"]),
                 "pickup_available": item["pickup_available"],
-                "warranty_info": item["warranty_info"],
+                "warranty_info": item.get("warranty_info") or "",  # RPC expects non-null
                 "copy_for_user": item["copy_for_user"],
-                "badges": json.dumps(item["badges"])  # Convert list to JSONB
+                "badges": item["badges"]  # Already list, RPC converts to JSONB
             }
-            item_rows.append(item_row)
+            items_jsonb.append(item_jsonb)
         
-        # Insert all items
-        items_result = supabase_client.table("wishlist_item").insert(item_rows).execute()
+        # Call RPC for atomic transaction
+        rpc_result = supabase_client.rpc(
+            "create_wishlist_with_items",
+            {
+                "p_user_id": user_id,
+                "p_goal_title": goal_title,
+                "p_budget_hint": _normalize_numeric_12_2(budget_hint),
+                "p_currency_code": currency_code,
+                "p_target_date": target_date,
+                "p_preferred_store": preferred_store,
+                "p_user_note": user_note,
+                "p_items": json.dumps(items_jsonb)  # Convert to JSON string
+            }
+        ).execute()
         
-        if not items_result.data:
-            # Rollback wishlist creation by deleting it
-            logger.error(f"Failed to create items, rolling back wishlist {wishlist_id}")
-            supabase_client.table("wishlist").delete().eq("id", wishlist_id).execute()
-            raise Exception("Failed to create wishlist items")
+        rpc_data = cast(List[Dict[str, Any]], rpc_result.data) if rpc_result.data else []
+        if not rpc_data or len(rpc_data) == 0:
+            raise Exception("Failed to create wishlist with items: RPC returned no data")
         
-        items_created = len(items_result.data)
-        logger.info(f"Created {items_created} items for wishlist {wishlist_id}")
+        rpc_response = rpc_data[0]
+        wishlist_id = str(rpc_response["wishlist_id"])
+        items_created = int(rpc_response["items_created"])
+        
+        logger.info(f"RPC created wishlist {wishlist_id} with {items_created} items atomically")
+        
+        # Fetch the created wishlist to return full record
+        fetched_wishlist = await get_wishlist_by_id(supabase_client, user_id, wishlist_id)
+        if not fetched_wishlist:
+            raise Exception(f"Failed to fetch created wishlist {wishlist_id}")
+        
+        created_wishlist: Dict[str, Any] = fetched_wishlist
+        
+        return created_wishlist, items_created
     
-    logger.info(
-        f"Wishlist {wishlist_id} created successfully with {items_created} items"
-    )
-    
-    return created_wishlist, items_created
+    else:
+        # No items: simple insert (no atomicity needed)
+        logger.info("Creating wishlist without items (simple insert)")
+        
+        wishlist_data = {
+            "user_id": user_id,
+            "goal_title": goal_title,
+            "budget_hint": _normalize_numeric_12_2(budget_hint),
+            "currency_code": currency_code,
+            "target_date": target_date,
+            "preferred_store": preferred_store,
+            "user_note": user_note,
+            "status": "active"
+        }
+        
+        result = supabase_client.table("wishlist").insert(wishlist_data).execute()
+        
+        if not result.data or len(result.data) == 0:
+            raise Exception("Failed to create wishlist: no data returned")
+        
+        created_wishlist: Dict[str, Any] = cast(Dict[str, Any], result.data[0])
+        logger.info(f"Wishlist created successfully: {created_wishlist['id']}")
+        
+        return created_wishlist, 0
 
 
 async def update_wishlist(
