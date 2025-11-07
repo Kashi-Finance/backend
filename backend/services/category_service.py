@@ -262,67 +262,29 @@ async def delete_category(
         raise Exception("Cannot delete system category")
     
     logger.info(f"Preparing to delete category {category_id} for user {user_id}")
-    
-    # Step 1: Find the 'general' system category (the reassignment target)
-    general_result = (
-        supabase_client.table("category")
-        .select("id")
-        .eq("key", "general")
-        .is_("user_id", "null")
-        .execute()
-    )
-    
-    # Normalize and validate returned data
-    general_data = cast(List[Dict[str, Any]], general_result.data) if general_result.data else []
-    if not general_data or len(general_data) == 0:
-        raise Exception("System 'general' category not found - database integrity issue")
 
-    general_category_id = str(general_data[0].get("id"))
-    logger.info(f"Found 'general' category: {general_category_id}")
-    
-    # Step 2: Reassign all transactions from deleted category to 'general'
+    # Delegate reassign + delete to DB RPC for atomicity (avoids race conditions)
     try:
-        update_res = (
-            supabase_client.table("transaction")
-            .update({"category_id": general_category_id})
-            .eq("category_id", category_id)
-            .execute()
+        rpc_res = supabase_client.rpc(
+            "delete_category_reassign",
+            {
+                "p_category_id": category_id,
+                "p_user_id": user_id,
+            },
+        ).execute()
+
+        data = getattr(rpc_res, "data", None)
+        if not isinstance(data, list) or len(data) == 0:
+            logger.warning(f"RPC delete_category_reassign returned no rows for category {category_id}")
+            return (False, 0, 0)
+
+        row = cast(Dict[str, Any], data[0])
+        transactions_reassigned = int(row.get("transactions_reassigned") or 0)
+        budget_links_removed = int(row.get("budget_links_removed") or 0)
+        logger.info(
+            f"Category {category_id} deleted via RPC: reassigned={transactions_reassigned}, links_removed={budget_links_removed}"
         )
-        update_data = cast(List[Dict[str, Any]], update_res.data) if update_res.data else []
-        transactions_reassigned = len(update_data)
-        logger.info(f"Reassigned {transactions_reassigned} transaction(s) to 'general' category")
+        return (True, transactions_reassigned, budget_links_removed)
     except Exception as e:
-        logger.error(f"Failed to reassign transactions for category {category_id}: {e}", exc_info=True)
+        logger.error(f"Failed to delete category via RPC for {category_id}: {e}", exc_info=True)
         raise
-    
-    # Step 3: Remove all budget_category links
-    try:
-        delete_budget_links_res = (
-            supabase_client.table("budget_category")
-            .delete()
-            .eq("category_id", category_id)
-            .execute()
-        )
-        delete_budget_links_data = cast(List[Dict[str, Any]], delete_budget_links_res.data) if delete_budget_links_res.data else []
-        budget_links_removed = len(delete_budget_links_data)
-        logger.info(f"Removed {budget_links_removed} budget_category link(s)")
-    except Exception as e:
-        logger.error(f"Failed to remove budget_category links for category {category_id}: {e}", exc_info=True)
-        raise
-    
-    # Step 4: Delete the category
-    result = (
-        supabase_client.table("category")
-        .delete()
-        .eq("id", category_id)
-        .execute()
-    )
-    
-    result_data = cast(List[Dict[str, Any]], result.data) if result.data else []
-    if not result_data or len(result_data) == 0:
-        logger.warning(f"Deletion of category {category_id} returned no rows")
-        return (False, transactions_reassigned, budget_links_removed)
-    
-    logger.info(f"Category {category_id} deleted successfully for user {user_id}")
-    
-    return (True, transactions_reassigned, budget_links_removed)
