@@ -1,0 +1,85 @@
+# Git files
+.git
+.gitignore
+.gitattributes
+
+# GitHub configuration
+.github
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.pyc
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+.hypothesis/
+.tox/
+
+# Documentation and markdown files (not needed in container)
+*.md
+docs/
+
+# Configuration files (should be set via environment variables)
+.env
+.env.*
+*.env
+
+# Supabase local development
+supabase/.branches/
+supabase/.temp/
+
+# Scripts and development tools
+scripts/
+*.sh
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Logs
+*.log
+
+# Database files (if any)
+*.db
+*.sqlite
+*.sqlite3
+
+# CI/CD files
+.gitlab-ci.yml
+.travis.yml
+azure-pipelines.yml
+
+# Docker files (no need to copy into image)
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# OS specific
+Thumbs.db
