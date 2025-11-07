@@ -181,3 +181,5 @@ class AccountListResponse(BaseModel):
         description="List of user's accounts"
     )
     count: int = Field(..., description="Total number of accounts returned")
+    limit: int = Field(..., description="Maximum number of accounts requested")
+    offset: int = Field(..., description="Number of accounts skipped (pagination offset)")
