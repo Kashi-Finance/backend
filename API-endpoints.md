@@ -156,6 +156,65 @@ Use in frontend:
 
 ---
 
+### `POST /profile`
+
+**Purpose:** Create a profile for the authenticated user.
+
+**Request:** JSON body validated by `ProfileCreateRequest`. Authorization required (Bearer token).
+
+**Request Body (example):**
+```json
+{
+  "first_name": "Andres",
+  "last_name": "Gonzalez",
+  "avatar_url": "https://storage.kashi.app/avatars/andres.png",
+  "currency_preference": "GTQ",
+  "locale": "system",
+  "country": "GT"
+}
+```
+
+**Required Fields:**
+- `first_name` (string)
+- `currency_preference` (string, ISO currency code, e.g. `GTQ`)
+- `country` (string, ISO-2 code, e.g. `GT`)
+
+**Behavior:**
+- Validates request body and permissions (Authorization required).
+- Derives `user_id` from the bearer token (client MUST NOT provide `user_id`).
+- Calls service layer `create_user_profile()` to insert the profile row (RLS enforced).
+- Returns the created profile as `ProfileResponse`.
+
+**Response (201 Created):**
+```json
+{
+  "user_id": "e3a6e0f1-625f-4f4f-a142-1aba8633a601",
+  "first_name": "Andres",
+  "last_name": "Gonzalez",
+  "avatar_url": "https://storage.kashi.app/avatars/andres.png",
+  "currency_preference": "GTQ",
+  "locale": "system",
+  "country": "GT",
+  "created_at": "2025-11-07T04:44:16.022189+00:00",
+  "updated_at": "2025-11-07T04:44:16.022189+00:00"
+}
+```
+
+**Status Codes:**
+* `201 CREATED` - Profile created successfully
+* `400 BAD REQUEST` - Invalid request data (missing required fields)
+* `401 UNAUTHORIZED` - Missing or invalid authentication token
+* `409 CONFLICT` - Profile already exists for this user (optional behavior)
+* `500 INTERNAL SERVER ERROR` - Database persistence error
+
+**Security:**
+* `user_id` is taken exclusively from the authenticated token (client cannot set/override it).
+* RLS enforces that the profile is created for the authenticated user only.
+
+**Notes:**
+* This endpoint is idempotent, current implementation creates a new profile and returns 201 on success. If a profile already exists, the API may return 409 or a 500 depending on DB constraints — clients should `GET /profile` first or handle conflict responses.
+
+
 ### `DELETE /profile`
 
 **Purpose:** Delete (anonymize) the authenticated user's profile.
@@ -1644,324 +1703,6 @@ This endpoint follows the deletion rule:
 **Security:**
 * RLS enforces user can only delete their own budgets
 * Cascade deletion is handled explicitly in service layer
-
----
-
-## 7. Wishlist / Goals / Recommendations integration
-
-### Hierarchy
-
-- `wishlist` **(Parent)** — represents the user goal or intention (e.g., _"I want a laptop for Photoshop, not gamer"_).
-    
-- `wishlist_item` **(Child)** — represents specific recommended options that the user decided to save from the Recommendation Agent results.
-
-### `GET /wishlists`
-
-**Description:** Returns all saved wishlists (goals) for the authenticated user.
-
-**Response Example:**
-
-```json
-[
-  {
-    "id": "f3d3b64c-79e4-4e29-bb2c-41b09e7ac8c1",
-    "goal_title": "Laptop for Photoshop (non-gamer)",
-    "budget_hint": 7000,
-    "currency_code": "GTQ",
-    "target_date": "2025-12-01",
-    "preferred_store": "Intelaf",
-    "user_note": "No RGB lights, quiet keyboard",
-    "status": "active",
-    "created_at": "2025-10-30T10:25:43.225Z",
-    "updated_at": "2025-10-30T10:25:43.225Z"
-  }
-]
-```
-
----
-
-### `POST /wishlists`
-
-**Description:** Creates a new wishlist goal for the user.
-
-**Request Body:**
-
-```json
-{
-  "goal_title": "Laptop for Photoshop",
-  "budget_hint": 7000,
-  "currency_code": "GTQ",
-  "target_date": "2025-12-01",
-  "preferred_store": "Intelaf",
-  "user_note": "Not gamer style",
-  "status": "active"
-}
-```
-
-**Response:**
-
-```json
-{
-  "id": "f3d3b64c-79e4-4e29-bb2c-41b09e7ac8c1",
-  "goal_title": "Laptop for Photoshop",
-  "budget_hint": 7000,
-  "currency_code": "GTQ",
-  "target_date": "2025-12-01",
-  "preferred_store": "Intelaf",
-  "user_note": "Not gamer style",
-  "status": "active",
-  "created_at": "2025-10-30T10:25:43.225Z"
-}
-```
-
----
-
-### `PATCH /wishlists/{wishlist_id}`
-
-**Description:** Updates an existing wishlist goal (e.g., marking it as completed or changing the target date).
-
-**Request Example:**
-
-```json
-{
-  "status": "purchased",
-  "target_date": "2025-12-31"
-}
-```
-
-**Response:**
-
-```json
-{
-  "id": "f3d3b64c-79e4-4e29-bb2c-41b09e7ac8c1",
-  "status": "purchased",
-  "target_date": "2025-12-31",
-  "updated_at": "2025-10-31T14:05:11.893Z"
-}
-```
-
----
-
-### `DELETE /wishlists/{wishlist_id}`
-
-**Description:** Deletes a wishlist and all its related items.
-
-**Delete Rule:** When a wishlist is deleted, **all related wishlist\_item rows must be deleted automatically** (`ON DELETE CASCADE`).
-
-**Response:**
-
-```json
-{ "message": "Wishlist and related items deleted successfully." }
-```
-
----
-
-## 8. `wishlist_item` Endpoints (Saved Recommendations)
-
-### `GET /wishlists/{wishlist_id}/items`
-
-**Description:** Returns all saved items within a specific wishlist.
-
-**Response Example:**
-
-```json
-[
-  {
-    "id": "24b2e91b-ec1a-4c94-9d1f-ded17b861c74",
-    "wishlist_id": "f3d3b64c-79e4-4e29-bb2c-41b09e7ac8c1",
-    "product_title": "ASUS VivoBook Ryzen 7",
-    "price_total": 6750,
-    "seller_name": "TecnoMundo",
-    "url": "https://tecnomundo.gt/asus-vivobook",
-    "pickup_available": true,
-    "warranty_info": "12 months",
-    "copy_for_user": "Great performance for Photoshop, below budget.",
-    "badges": ["Best Price", "Warranty 12m"],
-    "created_at": "2025-10-30T11:03:21.446Z"
-  }
-]
-```
-
----
-
-### `POST /wishlists/{wishlist_id}/items`
-
-**Description:** Adds a new recommended item to an existing wishlist.
-
-**Request Example:**
-
-```json
-{
-  "product_title": "ASUS VivoBook Ryzen 7",
-  "price_total": 6750,
-  "seller_name": "TecnoMundo",
-  "url": "https://tecnomundo.gt/asus-vivobook",
-  "pickup_available": true,
-  "warranty_info": "12 months",
-  "copy_for_user": "Recommended by AI agent.",
-  "badges": ["Best Value", "Trusted Store"]
-}
-```
-
-**Response:**
-
-```json
-{
-  "id": "...",
-  "wishlist_id": "...",
-  "product_title": "ASUS VivoBook Ryzen 7",
-  "price_total": 6750,
-  "seller_name": "TecnoMundo",
-  "url": "https://tecnomundo.gt/asus-vivobook",
-  "pickup_available": true,
-  "warranty_info": "12 months",
-  "copy_for_user": "Recommended by AI agent.",
-  "badges": ["Best Value", "Trusted Store"],
-  "created_at": "2025-10-30T11:03:21.446Z"
-}
-```
-
----
-
-### `DELETE /wishlists/{wishlist_id}/items/{item_id}`
-
-**Description:** Deletes a specific saved recommendation from the user wishlist.
-
-**Delete Rule:** When a wishlist\_item is deleted, **only that item is removed**. The parent wishlist remains intact.
-
-**Response:**
-
-```json
-{ "message": "Wishlist item deleted successfully." }
-```
-
-
-
-
----
-
-## 9. Recommendation Agent Entry Point
-
-Single public entry for all product suggestions / purchase guidance. The frontend NEVER calls subagents directly.
-
-### `POST /recommendations/query`
-
-Purpose: ask for product suggestions or continue an ongoing clarification loop.
-* Body must include:
-
-```json
-
-{
-
-	"query_raw": "texto libre que el usuario escribió",
-	
-	"budget_hint": 7000,
-	
-	"extra_details": {
-	
-	// merged answers the user already gave in previous steps
-	
-	}
-
-}
-
-```
-
-`extra_details` starts as `{}` and grows as the agent asks follow-ups.
-
-Backend flow:
-1. FastAPI calls `RecommendationCoordinatorAgent`.
-2. That agent validates intent:
-	* rejects sexual / crimen / cosas prohibidas → `NO_VALID_OPTION`.
-	* also rejects cosas incoherentes ("quiero un misil").
-3. If info is incomplete:
-	* returns `NEEDS_CLARIFICATION` with questions.
-4. If info is good:
-	* calls SearchAgent → FormatterAgent
-	* returns up to 3 ranked options.
-
-Possible responses:
-
-**A. status = "NEEDS_CLARIFICATION"**
-
-
-```json
-
-{
-
-	"status": "NEEDS_CLARIFICATION",
-	
-	"missing_fields": [
-	
-	{ "field": "use_case", "question": "¿Para qué la vas a usar? (oficina, diseño...)" }
-	
-	]
-
-}
-
-```
-
-Frontend: show these exact `question`s, collect answers, merge them into `extra_details` and re-call this same endpoint.
-
-
-**B. status = "OK"**
-
-```json
-
-{
-
-	"status": "OK",
-	
-	"results_for_user": [
-	
-	{
-	
-		"product_title": "HP Envy Ryzen 7 16GB RAM 512GB SSD 15.6\"",
-		
-		"price_total": 6200.00,
-		
-		"seller_name": "ElectroCentro Guatemala",
-		
-		"url": "https://electrocentro.gt/hp-envy-ryzen7",
-		
-		"pickup_available": true,
-		
-		"warranty_info": "Garantía HP 12 meses",
-		
-		"copy_for_user": "Opción recomendada para diseño gráfico. Buen rendimiento con Ryzen 7 y 16GB RAM. Está alrededor de Q100 más barata que otras opciones similares.",
-		
-		"badges": ["Más barata", "Pantalla antirreflejo", "Garantía 12 meses"]
-	
-	}
-	
-	]
-
-}
-
-```
-
-Rules for frontend:
-* Render cards exactly in this order. Do not reorder. Do not rewrite `copy_for_user`.
-* Si el usuario no tiene aún una wishlist para esta meta, crearla con `POST /wishlists` y luego guardar la opción con `POST /wishlists/{wishlist_id}/items`. Si ya existe, saltar directo al POST de `items`
-* If the user doesn't have a wishlist for this goal yet, create it using `POST /wishlists` then store the option using `POST /wishlists/{wishlist_id}/items`. If already exists, do the POST `items`
-  
-
-**C. status = "NO_VALID_OPTION"**
-
-```json
-
-{
-
-"status": "NO_VALID_OPTION"
-
-}
-
-```
-
-
-Meaning:
-* Agent searched but filtered everything (estafa, precios falsos, incoherente, producto bloqueado).
-* Frontend shows "No encontramos una oferta confiable con esos criterios." + CTA para ajustar presupuesto / marca.
 
 ---
 
