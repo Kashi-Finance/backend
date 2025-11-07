@@ -8,7 +8,7 @@ per DB documentation rules.
 
 import logging
 from typing import Annotated, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Path, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Path, Body, Query
 
 from backend.auth.dependencies import get_authenticated_user, AuthenticatedUser
 from backend.db.client import get_supabase_client
@@ -48,6 +48,7 @@ router = APIRouter(prefix="/accounts", tags=["accounts"])
     - Returns all user's financial accounts
     - Ordered by creation date (newest first)
     - Only accessible to the account owner (RLS enforced)
+    - Supports pagination via limit/offset
     
     Security:
     - Requires valid Authorization Bearer token
@@ -55,39 +56,43 @@ router = APIRouter(prefix="/accounts", tags=["accounts"])
     """
 )
 async def list_accounts(
-    auth_user: Annotated[AuthenticatedUser, Depends(get_authenticated_user)]
+    auth_user: Annotated[AuthenticatedUser, Depends(get_authenticated_user)],
+    limit: int = Query(50, ge=1, le=100, description="Maximum number of accounts to return"),
+    offset: int = Query(0, ge=0, description="Number of accounts to skip for pagination")
 ) -> AccountListResponse:
     """
     List all accounts for the authenticated user.
     
     **6-STEP ENDPOINT FLOW:**
     
-    Step 1: Auth
+    Auth
     - Handled by get_authenticated_user dependency
     
-    Step 2: Parse/Validate Request
-    - No request body (GET endpoint)
+    Parse/Validate Request
+    - Query parameters validated by FastAPI (limit, offset)
     
-    Step 3: Domain & Intent Filter
+    Domain & Intent Filter
     - Simple list request, no filtering needed
     
-    Step 4: Call Service
-    - Call get_user_accounts() service function
+    Call Service
+    - Call get_user_accounts() service function with pagination
     
-    Step 5: Map Output -> ResponseModel
+    Map Output -> ResponseModel
     - Convert accounts list to AccountListResponse
     
-    Step 6: Persistence
+    Persistence
     - Read-only operation (no persistence needed)
     """
-    logger.info(f"Listing accounts for user {auth_user.user_id}")
+    logger.info(f"Listing accounts for user {auth_user.user_id} (limit={limit}, offset={offset})")
     
     supabase_client = get_supabase_client(auth_user.access_token)
     
     try:
         accounts = await get_user_accounts(
             supabase_client=supabase_client,
-            user_id=auth_user.user_id
+            user_id=auth_user.user_id,
+            limit=limit,
+            offset=offset
         )
         
         # Helper to coerce DB values to strings
@@ -111,7 +116,9 @@ async def list_accounts(
         
         return AccountListResponse(
             accounts=account_responses,
-            count=len(account_responses)
+            count=len(account_responses),
+            limit=limit,
+            offset=offset
         )
         
     except Exception as e:

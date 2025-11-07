@@ -16,14 +16,18 @@ logger = logging.getLogger(__name__)
 
 async def get_user_accounts(
     supabase_client: Client,
-    user_id: str
+    user_id: str,
+    limit: int = 50,
+    offset: int = 0
 ) -> List[Dict[str, Any]]:
     """
-    Fetch all accounts belonging to the user.
+    Fetch all accounts belonging to the user with pagination support.
     
     Args:
         supabase_client: Authenticated Supabase client
         user_id: The authenticated user's ID
+        limit: Maximum number of accounts to return (default 50)
+        offset: Number of accounts to skip for pagination (default 0)
     
     Returns:
         List of account dicts
@@ -32,13 +36,14 @@ async def get_user_accounts(
         - RLS enforces user_id = auth.uid()
         - User can only access their own accounts
     """
-    logger.debug(f"Fetching accounts for user {user_id}")
+    logger.debug(f"Fetching accounts for user {user_id} (limit={limit}, offset={offset})")
     
     result = (
         supabase_client.table("account")
         .select("*")
         .eq("user_id", user_id)
         .order("created_at", desc=True)
+        .range(offset, offset + limit - 1)
         .execute()
     )
     
