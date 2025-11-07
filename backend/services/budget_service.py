@@ -42,12 +42,13 @@ async def get_all_budgets(
     logger.debug(f"Fetching budgets with categories for user {user_id}")
     
     # Use Supabase foreign key syntax to join budget_category and category
+    # Select full category records so the API can return every category field
     result = (
         supabase_client.table("budget")
         .select("""
             *,
             budget_category(
-                category:category_id(id, name, flow_type, key)
+                category:category_id(*)
             )
         """)
         .eq("user_id", user_id)
@@ -68,12 +69,13 @@ async def get_all_budgets(
             for link in budget_raw["budget_category"]:
                 if link and "category" in link and link["category"]:
                     cat = link["category"]
-                    categories.append({
-                        "id": str(cat.get("id")),
-                        "name": str(cat.get("name")),
-                        "flow_type": str(cat.get("flow_type")),
-                        "key": cat.get("key")  # None for user categories
-                    })
+                    # Include every field from the category record so the
+                    # frontend can reuse DTOs without losing timestamps/user_id.
+                    # Convert id to string for consistency.
+                    full_cat = {k: v for k, v in cat.items()} if isinstance(cat, dict) else {}
+                    if "id" in full_cat:
+                        full_cat["id"] = str(full_cat["id"])
+                    categories.append(full_cat)
         
         budget["categories"] = categories
         budgets.append(budget)
@@ -107,12 +109,13 @@ async def get_budget_by_id(
     """
     logger.debug(f"Fetching budget {budget_id} with categories for user {user_id}")
     
+    # Select full category records so the API can return every category field
     result = (
         supabase_client.table("budget")
         .select("""
             *,
             budget_category(
-                category:category_id(id, name, flow_type, key)
+                category:category_id(*)
             )
         """)
         .eq("id", budget_id)
@@ -135,12 +138,12 @@ async def get_budget_by_id(
         for link in budget_raw["budget_category"]:
             if link and "category" in link and link["category"]:
                 cat = link["category"]
-                categories.append({
-                    "id": str(cat.get("id")),
-                    "name": str(cat.get("name")),
-                    "flow_type": str(cat.get("flow_type")),
-                    "key": cat.get("key")  # None for user categories
-                })
+                # Include every field from the category record so the
+                # frontend can reuse DTOs without losing timestamps/user_id.
+                full_cat = {k: v for k, v in cat.items()} if isinstance(cat, dict) else {}
+                if "id" in full_cat:
+                    full_cat["id"] = str(full_cat["id"])
+                categories.append(full_cat)
     
     budget["categories"] = categories
     
