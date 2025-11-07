@@ -1,0 +1,366 @@
+"""
+Budget persistence service.
+
+CRITICAL RULES (from DB documentation.md):
+1. Budgets track spending limits over time for one or more categories
+2. Categories are linked via budget_category junction table
+3. When deleting a budget:
+   - First delete all budget_category links
+   - Then delete the budget
+   - Never delete transactions (they remain as history)
+4. RLS is enforced automatically via the authenticated Supabase client
+"""
+
+import logging
+from typing import Dict, Any, Optional, List, cast
+
+from supabase import Client
+
+logger = logging.getLogger(__name__)
+
+
+async def get_all_budgets(
+    supabase_client: Client,
+    user_id: str
+) -> List[Dict[str, Any]]:
+    """
+    Fetch all budgets for the user with their linked categories.
+    
+    Uses Supabase JOIN to fetch budget_category relationships and category details.
+    
+    Args:
+        supabase_client: Authenticated Supabase client
+        user_id: The authenticated user's ID
+    
+    Returns:
+        List of budget records with embedded categories
+    
+    Security:
+        - RLS enforces user_id = auth.uid()
+        - User can only access their own budgets
+    """
+    logger.debug(f"Fetching budgets with categories for user {user_id}")
+    
+    # Use Supabase foreign key syntax to join budget_category and category
+    result = (
+        supabase_client.table("budget")
+        .select("""
+            *,
+            budget_category(
+                category:category_id(id, name, flow_type, key)
+            )
+        """)
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    
+    budgets_raw = cast(List[Dict[str, Any]], result.data or [])
+    
+    # Transform nested structure to flat categories list
+    budgets = []
+    for budget_raw in budgets_raw:
+        budget = {k: v for k, v in budget_raw.items() if k != "budget_category"}
+        
+        # Extract categories from budget_category junction
+        categories = []
+        if "budget_category" in budget_raw and budget_raw["budget_category"]:
+            for link in budget_raw["budget_category"]:
+                if link and "category" in link and link["category"]:
+                    cat = link["category"]
+                    categories.append({
+                        "id": str(cat.get("id")),
+                        "name": str(cat.get("name")),
+                        "flow_type": str(cat.get("flow_type")),
+                        "key": cat.get("key")  # None for user categories
+                    })
+        
+        budget["categories"] = categories
+        budgets.append(budget)
+    
+    logger.info(f"Fetched {len(budgets)} budgets with categories for user {user_id}")
+    
+    return budgets
+
+
+async def get_budget_by_id(
+    supabase_client: Client,
+    user_id: str,
+    budget_id: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Fetch a single budget by its ID with linked categories.
+    
+    Uses Supabase JOIN to fetch budget_category relationships and category details.
+    
+    Args:
+        supabase_client: Authenticated Supabase client
+        user_id: The authenticated user's ID
+        budget_id: UUID of the budget to fetch
+    
+    Returns:
+        Budget record with embedded categories if found and accessible, None otherwise
+    
+    Security:
+        - User can only access their own budgets
+        - RLS enforces user_id = auth.uid()
+    """
+    logger.debug(f"Fetching budget {budget_id} with categories for user {user_id}")
+    
+    result = (
+        supabase_client.table("budget")
+        .select("""
+            *,
+            budget_category(
+                category:category_id(id, name, flow_type, key)
+            )
+        """)
+        .eq("id", budget_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    
+    if not result.data or len(result.data) == 0:
+        logger.warning(f"Budget {budget_id} not found or not accessible by user {user_id}")
+        return None
+    
+    budget_raw = cast(Dict[str, Any], result.data[0])
+    
+    # Transform nested structure to flat categories list
+    budget = {k: v for k, v in budget_raw.items() if k != "budget_category"}
+    
+    # Extract categories from budget_category junction
+    categories = []
+    if "budget_category" in budget_raw and budget_raw["budget_category"]:
+        for link in budget_raw["budget_category"]:
+            if link and "category" in link and link["category"]:
+                cat = link["category"]
+                categories.append({
+                    "id": str(cat.get("id")),
+                    "name": str(cat.get("name")),
+                    "flow_type": str(cat.get("flow_type")),
+                    "key": cat.get("key")  # None for user categories
+                })
+    
+    budget["categories"] = categories
+    
+    logger.info(f"Fetched budget {budget_id} with {len(categories)} categories for user {user_id}")
+    
+    return budget
+
+
+async def create_budget(
+    supabase_client: Client,
+    user_id: str,
+    limit_amount: float,
+    frequency: str,
+    interval: int,
+    start_date: str,
+    end_date: Optional[str],
+    is_active: bool,
+    category_ids: List[str]
+) -> tuple[Dict[str, Any], int]:
+    """
+    Create a new budget and link categories.
+    
+    Args:
+        supabase_client: Authenticated Supabase client
+        user_id: The authenticated user's ID
+        limit_amount: Maximum spend for budget period
+        frequency: Budget repetition cadence
+        interval: How often budget repeats
+        start_date: When budget starts (ISO-8601 date)
+        end_date: When budget ends (optional)
+        is_active: Whether budget is active
+        category_ids: List of category UUIDs to link
+    
+    Returns:
+        Tuple of (created budget, number of categories linked)
+    
+    Raises:
+        Exception: If the database operation fails
+    
+    Security:
+        - RLS enforces that user_id = auth.uid()
+        - User can only create budgets for themselves
+    """
+    budget_data = {
+        "user_id": user_id,
+        "limit_amount": limit_amount,
+        "frequency": frequency,
+        "interval": interval,
+        "start_date": start_date,
+        "end_date": end_date,
+        "is_active": is_active
+    }
+    
+    logger.info(f"Creating budget for user {user_id}: limit={limit_amount}, frequency={frequency}")
+    
+    result = supabase_client.table("budget").insert(budget_data).execute()
+    
+    if not result.data or len(result.data) == 0:
+        raise Exception("Failed to create budget: no data returned")
+    
+    created_budget = cast(Dict[str, Any], result.data[0])
+    budget_id = str(created_budget.get("id"))
+    
+    logger.info(f"Budget created successfully: {budget_id}")
+    
+    # Link categories via budget_category
+    categories_linked = 0
+    if category_ids:
+        budget_category_links = [
+            {
+                "budget_id": budget_id,
+                "category_id": cat_id,
+                "user_id": user_id
+            }
+            for cat_id in category_ids
+        ]
+        
+        link_result = (
+            supabase_client.table("budget_category")
+            .insert(budget_category_links)
+            .execute()
+        )
+        
+        if link_result.data:
+            categories_linked = len(link_result.data)
+            logger.info(f"Linked {categories_linked} categories to budget {budget_id}")
+    
+    # Re-fetch budget with categories to include in response
+    budget_with_categories = await get_budget_by_id(supabase_client, user_id, budget_id)
+    if not budget_with_categories:
+        # Fallback to created_budget without categories if fetch fails
+        logger.warning(f"Could not re-fetch budget {budget_id} with categories")
+        created_budget["categories"] = []
+        return created_budget, categories_linked
+    
+    return budget_with_categories, categories_linked
+
+
+async def update_budget(
+    supabase_client: Client,
+    user_id: str,
+    budget_id: str,
+    **updates: Any
+) -> Optional[Dict[str, Any]]:
+    """
+    Update a budget.
+    
+    Args:
+        supabase_client: Authenticated Supabase client
+        user_id: The authenticated user's ID
+        budget_id: UUID of the budget to update
+        **updates: Fields to update
+    
+    Returns:
+        Updated budget record if successful, None if not found or not accessible
+    
+    Raises:
+        Exception: If trying to update a budget that doesn't belong to user
+    
+    Security:
+        - User can only update their own budgets
+        - RLS enforces user_id = auth.uid()
+    
+    NOTE: This does not update budget_category links. Use separate endpoints
+    for adding/removing category links.
+    """
+    # First verify the budget exists and is owned by user
+    existing = await get_budget_by_id(supabase_client, user_id, budget_id)
+    if not existing:
+        return None
+    
+    logger.info(f"Updating budget {budget_id} for user {user_id}: {list(updates.keys())}")
+    
+    result = (
+        supabase_client.table("budget")
+        .update(updates)
+        .eq("id", budget_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    
+    if not result.data or len(result.data) == 0:
+        logger.warning(f"Budget {budget_id} not found for user {user_id}")
+        return None
+    
+    logger.info(f"Budget {budget_id} updated successfully")
+    
+    # Re-fetch budget with categories to include in response
+    updated_budget_with_categories = await get_budget_by_id(supabase_client, user_id, budget_id)
+    
+    return updated_budget_with_categories
+
+
+async def delete_budget(
+    supabase_client: Client,
+    user_id: str,
+    budget_id: str
+) -> tuple[bool, int]:
+    """
+    Delete a user budget following DB deletion rules.
+    
+    DB Delete Rule (from DB documentation.md):
+    1. Delete all budget_category links tied to this budget
+    2. Delete the budget
+    3. Never delete transactions (they remain as financial history)
+    
+    Args:
+        supabase_client: Authenticated Supabase client
+        user_id: The authenticated user's ID
+        budget_id: UUID of the budget to delete
+    
+    Returns:
+        Tuple of (success, number of budget_category links removed)
+    
+    Raises:
+        Exception: If DB operation fails
+    
+    Security:
+        - User can only delete their own budgets
+        - RLS enforces user_id = auth.uid()
+    """
+    # First verify the budget exists and is owned by user
+    existing = await get_budget_by_id(supabase_client, user_id, budget_id)
+    if not existing:
+        logger.warning(f"Cannot delete budget {budget_id}: not found or not accessible by user {user_id}")
+        return (False, 0)
+    
+    logger.info(f"Preparing to delete budget {budget_id} for user {user_id}")
+    
+    # Step 1: Delete all budget_category links
+    try:
+        delete_links_result = (
+            supabase_client.table("budget_category")
+            .delete()
+            .eq("budget_id", budget_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        
+        delete_links_data = cast(List[Dict[str, Any]], delete_links_result.data) if delete_links_result.data else []
+        categories_unlinked = len(delete_links_data)
+        logger.info(f"Removed {categories_unlinked} budget_category link(s)")
+    except Exception as e:
+        logger.error(f"Failed to remove budget_category links for budget {budget_id}: {e}", exc_info=True)
+        raise
+    
+    # Step 2: Delete the budget
+    result = (
+        supabase_client.table("budget")
+        .delete()
+        .eq("id", budget_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    
+    result_data = cast(List[Dict[str, Any]], result.data) if result.data else []
+    if not result_data or len(result_data) == 0:
+        logger.warning(f"Deletion of budget {budget_id} returned no rows")
+        return (False, categories_unlinked)
+    
+    logger.info(f"Budget {budget_id} deleted successfully for user {user_id}")
+    
+    return (True, categories_unlinked)
