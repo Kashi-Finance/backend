@@ -1,0 +1,42 @@
+#!/bin/zsh
+# Test: POST /invoices/ocr (requires authentication)
+# Upload a receipt image for OCR extraction (PREVIEW/DRAFT mode)
+
+cd "$(dirname "$0")/../.."
+
+# Load environment
+source scripts/integration/setup-env.sh || exit 1
+
+echo ""
+echo "📤 Testing: POST /invoices/ocr"
+echo ""
+echo "Parameters:"
+echo "  - Authorization: Bearer \$REAL_TEST_TOKEN"
+echo "  - Image: test receipt image (base64 or file)"
+echo ""
+
+# Check if test image exists
+TEST_IMAGE="scripts/integration/test-receipt.jpeg"
+if [ ! -f "$TEST_IMAGE" ]; then
+    echo "⚠️  Test image not found at $TEST_IMAGE"
+    echo "   Creating a minimal test image placeholder..."
+    # Create a minimal valid JPEG (1x1 white pixel)
+    printf '\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xFF\xDB\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t\x08\n\x0C\x14\r\x0C\x0B\x0B\x0C\x19\x12\x13\x0F\x14\x1D\x1A\x1F\x1E\x1D\x1A\x1C\x1C $.\x20,#\x1C\x1C(7),01444\x1F'"'"'9=82<.342\xFF\xC0\x00\x0B\x08\x00\x01\x00\x01\x01\x01\x11\x00\xFF\xC4\x00\x1F\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0B\xFF\xC4\x00\xB5\x10\x00\x02\x01\x03\x03\x02\x04\x03\x05\x05\x04\x04\x00\x00\x01}\x01\x02\x03\x00\x04\x11\x05\x12!1A\x06\x13Qa\x07"q\x142\x81\x91\xa1\x08#B\xb1\xc1\x15R\xd1\xf0$3br\x82\t\n\x16\x17\x18\x19\x1a%&'"'"'()*456789:CDEFGHIJSTUVWXYZcdefghijstuvwxyz\x83\x84\x85\x86\x87\x88\x89\x8a\x92\x93\x94\x95\x96\x97\x98\x99\x9a\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xff\xda\x08\x01\x01\x00\x00?\x00\xfb\xd4\xff\xd9' > "$TEST_IMAGE"
+    echo "   ✅ Created minimal test image"
+fi
+
+echo "Uploading image from: $TEST_IMAGE"
+echo ""
+
+# Upload with multipart form-data
+curl -X POST http://localhost:8000/invoices/ocr \
+  -H "Authorization: Bearer $REAL_TEST_TOKEN" \
+  -F "image=@$TEST_IMAGE" \
+  -w "\n\n📊 Status Code: %{http_code}\n" \
+  -s | jq . 2>/dev/null || curl -X POST http://localhost:8000/invoices/ocr \
+  -H "Authorization: Bearer $REAL_TEST_TOKEN" \
+  -F "image=@$TEST_IMAGE" \
+  -w "\n\n📊 Status Code: %{http_code}\n" \
+  -s
+
+echo ""
