@@ -15,11 +15,11 @@ from backend.db.client import get_supabase_client
 from backend.schemas.transfers import (
     TransferCreateRequest,
     TransferCreateResponse,
-    TransferResponse,
     RecurringTransferCreateRequest,
     RecurringTransferCreateResponse,
-    RecurringTransferResponse,
 )
+from backend.schemas.transactions import TransactionDetailResponse
+from backend.schemas.recurring_transactions import RecurringTransactionResponse
 from backend.services import transfer_service
 
 logger = logging.getLogger(__name__)
@@ -76,19 +76,15 @@ async def create_transfer(
             description=request.description
         )
         
-        transfer_response = TransferResponse(
-            from_transaction_id=outgoing["id"],
-            to_transaction_id=incoming["id"],
-            from_account_id=request.from_account_id,
-            to_account_id=request.to_account_id,
-            amount=request.amount,
-            date=request.date,
-            description=request.description
-        )
+        # Map the two transaction dicts to TransactionDetailResponse
+        transactions = [
+            TransactionDetailResponse(**outgoing),
+            TransactionDetailResponse(**incoming)
+        ]
         
         return TransferCreateResponse(
             status="CREATED",
-            transfer=transfer_response,
+            transactions=transactions,
             message="Transfer created successfully"
         )
     
@@ -174,28 +170,15 @@ async def create_recurring_transfer(
             is_active=request.is_active
         )
         
-        recurring_transfer_response = RecurringTransferResponse(
-            outgoing_rule_id=outgoing_rule["id"],
-            incoming_rule_id=incoming_rule["id"],
-            from_account_id=request.from_account_id,
-            to_account_id=request.to_account_id,
-            amount=request.amount,
-            description_outgoing=request.description_outgoing,
-            description_incoming=request.description_incoming,
-            frequency=request.frequency,
-            interval=request.interval,
-            by_weekday=request.by_weekday,
-            by_monthday=request.by_monthday,
-            start_date=request.start_date,
-            next_run_date=outgoing_rule["next_run_date"],
-            end_date=request.end_date,
-            is_active=request.is_active,
-            created_at=outgoing_rule["created_at"]
-        )
+        # Map the two recurring transaction dicts to RecurringTransactionResponse
+        recurring_transactions = [
+            RecurringTransactionResponse(**outgoing_rule),
+            RecurringTransactionResponse(**incoming_rule)
+        ]
         
         return RecurringTransferCreateResponse(
             status="CREATED",
-            recurring_transfer=recurring_transfer_response,
+            recurring_transactions=recurring_transactions,
             message="Recurring transfer created successfully"
         )
     

@@ -9,6 +9,10 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 
+# Import TransactionDetailResponse for reuse
+from backend.schemas.transactions import TransactionDetailResponse
+
+
 # --- Normal Transfer Schemas ---
 
 class TransferCreateRequest(BaseModel):
@@ -37,25 +41,18 @@ class TransferCreateRequest(BaseModel):
         return v
 
 
-class TransferResponse(BaseModel):
-    """
-    Response representing a completed transfer.
-    
-    Contains both transaction IDs (source and destination).
-    """
-    from_transaction_id: str = Field(..., description="UUID of outgoing transaction")
-    to_transaction_id: str = Field(..., description="UUID of incoming transaction")
-    from_account_id: str = Field(..., description="Source account UUID")
-    to_account_id: str = Field(..., description="Destination account UUID")
-    amount: float = Field(..., description="Amount transferred")
-    date: str = Field(..., description="Transfer date (ISO-8601)")
-    description: Optional[str] = Field(None, description="Transfer description")
-
-
 class TransferCreateResponse(BaseModel):
-    """Response after creating a transfer."""
+    """
+    Response after creating a transfer.
+    
+    Returns the two paired transaction records created (outcome and income).
+    Frontend can treat these as regular transactions in their displays.
+    """
     status: Literal["CREATED"] = "CREATED"
-    transfer: TransferResponse
+    transactions: List[TransactionDetailResponse] = Field(
+        ...,
+        description="Array of two transactions: [0] = outcome from source, [1] = income to destination"
+    )
     message: str = Field(..., description="Success message")
 
 
@@ -67,9 +64,15 @@ class TransferDeleteResponse(BaseModel):
     message: str = Field(..., description="Success message")
 
 
+
+
 # --- Recurring Transfer Schemas ---
 
 RecurringFrequency = Literal["daily", "weekly", "monthly", "yearly"]
+
+
+# Import RecurringTransactionResponse for reuse
+from backend.schemas.recurring_transactions import RecurringTransactionResponse
 
 
 class RecurringTransferCreateRequest(BaseModel):
@@ -133,34 +136,18 @@ class RecurringTransferCreateRequest(BaseModel):
         return v
 
 
-class RecurringTransferResponse(BaseModel):
-    """
-    Response representing a recurring transfer template.
-    
-    Contains both recurring_transaction rule IDs (source and destination).
-    """
-    outgoing_rule_id: str = Field(..., description="UUID of outgoing recurring rule")
-    incoming_rule_id: str = Field(..., description="UUID of incoming recurring rule")
-    from_account_id: str = Field(..., description="Source account UUID")
-    to_account_id: str = Field(..., description="Destination account UUID")
-    amount: float = Field(..., description="Amount per occurrence")
-    description_outgoing: Optional[str] = Field(None, description="Outgoing description")
-    description_incoming: Optional[str] = Field(None, description="Incoming description")
-    frequency: RecurringFrequency = Field(..., description="Recurrence pattern")
-    interval: int = Field(..., description="Interval multiplier")
-    by_weekday: Optional[List[str]] = Field(None, description="Weekdays for weekly")
-    by_monthday: Optional[List[int]] = Field(None, description="Month days for monthly")
-    start_date: str = Field(..., description="Start date")
-    next_run_date: str = Field(..., description="Next execution date")
-    end_date: Optional[str] = Field(None, description="End date or NULL")
-    is_active: bool = Field(..., description="Whether rules are active")
-    created_at: str = Field(..., description="Creation timestamp")
-
-
 class RecurringTransferCreateResponse(BaseModel):
-    """Response after creating a recurring transfer."""
+    """
+    Response after creating a recurring transfer.
+    
+    Returns the two paired recurring_transaction records created 
+    (outcome and income rules). Frontend can use the same schema as regular recurring transactions.
+    """
     status: Literal["CREATED"] = "CREATED"
-    recurring_transfer: RecurringTransferResponse
+    recurring_transactions: List[RecurringTransactionResponse] = Field(
+        ...,
+        description="Array of two recurring transaction rules: [0] = outcome from source, [1] = income to destination"
+    )
     message: str = Field(..., description="Success message")
 
 

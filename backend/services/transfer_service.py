@@ -26,12 +26,7 @@ async def create_transfer(
     """
     Create a one-time internal transfer between two accounts.
     
-    Creates two paired transactions:
-    1. Outcome transaction from source account
-    2. Income transaction to destination account
-    
-    Both transactions are linked via paired_transaction_id and use the
-    'transfer' system category.
+    Uses RPC function `create_transfer` for atomic paired transaction creation.
     
     Args:
         supabase_client: Authenticated Supabase client
@@ -48,39 +43,16 @@ async def create_transfer(
         
     Raises:
         ValueError: If accounts don't belong to user or validation fails
-        Exception: If transaction creation fails
+        Exception: If RPC call fails
         
     Security:
-        - Validates both accounts belong to user_id
-        - RLS enforces user_id = auth.uid() on inserts
+        - RPC validates both accounts belong to user_id
+        - All operations happen atomically in DB
     """
     logger.info(
         f"Creating transfer for user {user_id}: "
         f"{amount} from {from_account_id} to {to_account_id}"
     )
-    
-    # Validate both accounts belong to the user
-    from_account_result = (
-        supabase_client.table("account")
-        .select("id")
-        .eq("id", from_account_id)
-        .eq("user_id", user_id)
-        .execute()
-    )
-    
-    if not from_account_result.data or len(from_account_result.data) == 0:
-        raise ValueError(f"Source account {from_account_id} not found or not accessible")
-    
-    to_account_result = (
-        supabase_client.table("account")
-        .select("id")
-        .eq("id", to_account_id)
-        .eq("user_id", user_id)
-        .execute()
-    )
-    
-    if not to_account_result.data or len(to_account_result.data) == 0:
-        raise ValueError(f"Destination account {to_account_id} not found or not accessible")
     
     # Fetch 'transfer' system category if not provided
     if transfer_category_id is None:
@@ -95,90 +67,51 @@ async def create_transfer(
             raise ValueError("System category 'transfer' not found")
         
         transfer_category_id = category_result.data[0]["id"]
-
     
-    # Step 1: Create outgoing transaction (outcome from source)
-    outgoing_data = {
-        "user_id": user_id,
-        "account_id": from_account_id,
-        "category_id": transfer_category_id,
-        "flow_type": "outcome",
-        "amount": amount,
-        "date": date,
-        "description": description
-    }
+    # Call RPC function for atomic transfer creation
+    result = supabase_client.rpc(
+        'create_transfer',
+        {
+            'p_user_id': user_id,
+            'p_from_account_id': from_account_id,
+            'p_to_account_id': to_account_id,
+            'p_amount': amount,
+            'p_date': date,
+            'p_description': description,
+            'p_transfer_category_id': transfer_category_id
+        }
+    ).execute()
     
+    if not result.data or len(result.data) == 0:
+        raise Exception("RPC create_transfer failed: no data returned")
+    
+    rpc_result = result.data[0]
+    outgoing_id = rpc_result['outgoing_transaction_id']
+    incoming_id = rpc_result['incoming_transaction_id']
+    
+    # Fetch both transactions for return value consistency
     outgoing_result = (
         supabase_client.table("transaction")
-        .insert(outgoing_data)
-        .execute()
-    )
-    
-    if not outgoing_result.data or len(outgoing_result.data) == 0:
-        raise Exception("Failed to create outgoing transaction")
-    
-    outgoing_transaction = outgoing_result.data[0]
-    outgoing_id = outgoing_transaction["id"]
-    
-    # Step 2: Create incoming transaction (income to destination)
-    incoming_data = {
-        "user_id": user_id,
-        "account_id": to_account_id,
-        "category_id": transfer_category_id,
-        "flow_type": "income",
-        "amount": amount,
-        "date": date,
-        "description": description,
-        "paired_transaction_id": outgoing_id
-    }
-    
-    incoming_result = (
-        supabase_client.table("transaction")
-        .insert(incoming_data)
-        .execute()
-    )
-    
-    if not incoming_result.data or len(incoming_result.data) == 0:
-        # Rollback: delete outgoing transaction
-        (
-            supabase_client.table("transaction")
-            .delete()
-            .eq("id", outgoing_id)
-            .execute()
-        )
-        raise Exception("Failed to create incoming transaction")
-    
-    incoming_transaction = incoming_result.data[0]
-    incoming_id = incoming_transaction["id"]
-    
-    # Step 3: Update outgoing transaction to link back to incoming
-    update_result = (
-        supabase_client.table("transaction")
-        .update({"paired_transaction_id": incoming_id})
+        .select("*")
         .eq("id", outgoing_id)
         .execute()
     )
     
-    if not update_result.data or len(update_result.data) == 0:
-        # Rollback: delete both transactions
-        (
-            supabase_client.table("transaction")
-            .delete()
-            .eq("id", outgoing_id)
-            .execute()
-        )
-        (
-            supabase_client.table("transaction")
-            .delete()
-            .eq("id", incoming_id)
-            .execute()
-        )
-        raise Exception("Failed to link paired transactions")
+    incoming_result = (
+        supabase_client.table("transaction")
+        .select("*")
+        .eq("id", incoming_id)
+        .execute()
+    )
     
-    outgoing_transaction = update_result.data[0]
+    if not outgoing_result.data or not incoming_result.data:
+        raise Exception("Failed to fetch created transactions")
+    
+    outgoing_transaction = outgoing_result.data[0]
+    incoming_transaction = incoming_result.data[0]
     
     logger.info(
-        f"Transfer created: {outgoing_id} (out) <-> {incoming_id} (in)"
+        f"Transfer created via RPC: {outgoing_id} (out) <-> {incoming_id} (in)"
     )
     
     return (outgoing_transaction, incoming_transaction)
@@ -192,6 +125,8 @@ async def delete_transfer(
     """
     Delete a transfer by deleting both paired transactions.
     
+    Uses RPC function `delete_transfer` for atomic deletion.
+    
     Args:
         supabase_client: Authenticated Supabase client
         user_id: User UUID from auth token
@@ -202,50 +137,32 @@ async def delete_transfer(
         
     Raises:
         ValueError: If transaction not found or not a transfer
-        Exception: If deletion fails
+        Exception: If RPC call fails
         
     Security:
-        RLS enforces user_id = auth.uid() on deletes
+        RPC validates ownership and atomicity
     """
     logger.info(f"Deleting transfer for user {user_id}: transaction {transaction_id}")
     
-    # Fetch the transaction
-    transaction_result = (
-        supabase_client.table("transaction")
-        .select("id, paired_transaction_id, user_id")
-        .eq("id", transaction_id)
-        .eq("user_id", user_id)
-        .execute()
-    )
+    # Call RPC function for atomic transfer deletion
+    result = supabase_client.rpc(
+        'delete_transfer',
+        {
+            'p_transaction_id': transaction_id,
+            'p_user_id': user_id
+        }
+    ).execute()
     
-    if not transaction_result.data or len(transaction_result.data) == 0:
-        raise ValueError(f"Transaction {transaction_id} not found or not accessible")
+    if not result.data or len(result.data) == 0:
+        raise Exception("RPC delete_transfer failed: no data returned")
     
-    transaction = transaction_result.data[0]
-    paired_id = transaction.get("paired_transaction_id")
+    rpc_result = result.data[0]
+    deleted_id = rpc_result['deleted_transaction_id']
+    paired_id = rpc_result['paired_transaction_id']
     
-    if not paired_id:
-        raise ValueError(f"Transaction {transaction_id} is not part of a transfer")
+    logger.info(f"Transfer deleted via RPC: {deleted_id} and {paired_id}")
     
-    # Delete both transactions
-    # The DB ON DELETE SET NULL will handle clearing the references
-    delete_main = (
-        supabase_client.table("transaction")
-        .delete()
-        .eq("id", transaction_id)
-        .execute()
-    )
-    
-    delete_paired = (
-        supabase_client.table("transaction")
-        .delete()
-        .eq("id", paired_id)
-        .execute()
-    )
-    
-    logger.info(f"Transfer deleted: {transaction_id} and {paired_id}")
-    
-    return (transaction_id, paired_id)
+    return (deleted_id, paired_id)
 
 
 # --- Recurring Transfer Service Functions ---
@@ -270,11 +187,7 @@ async def create_recurring_transfer(
     """
     Create a recurring internal transfer.
     
-    Creates two paired recurring_transaction rules:
-    1. Outcome template for source account
-    2. Income template for destination account
-    
-    Both rules are linked via paired_recurring_transaction_id.
+    Uses RPC function `create_recurring_transfer` for atomic paired rule creation.
     
     Args:
         supabase_client: Authenticated Supabase client
@@ -291,46 +204,23 @@ async def create_recurring_transfer(
         by_monthday: Month days for monthly frequency (optional)
         end_date: End date or NULL (optional)
         is_active: Whether rules are active (default True)
-        transfer_category_id: UUID of 'transfer' system category
+        transfer_category_id: UUID of 'from_recurrent_transaction' system category
         
     Returns:
         Tuple of (outgoing_rule, incoming_rule) dicts
         
     Raises:
         ValueError: If accounts don't belong to user or validation fails
-        Exception: If rule creation fails
+        Exception: If RPC call fails
         
     Security:
-        - Validates both accounts belong to user_id
-        - RLS enforces user_id = auth.uid() on inserts
+        - RPC validates both accounts belong to user_id
+        - All operations happen atomically in DB
     """
     logger.info(
         f"Creating recurring transfer for user {user_id}: "
         f"{amount} from {from_account_id} to {to_account_id}, {frequency}"
     )
-    
-    # Validate both accounts belong to the user
-    from_account_result = (
-        supabase_client.table("account")
-        .select("id")
-        .eq("id", from_account_id)
-        .eq("user_id", user_id)
-        .execute()
-    )
-    
-    if not from_account_result.data or len(from_account_result.data) == 0:
-        raise ValueError(f"Source account {from_account_id} not found or not accessible")
-    
-    to_account_result = (
-        supabase_client.table("account")
-        .select("id")
-        .eq("id", to_account_id)
-        .eq("user_id", user_id)
-        .execute()
-    )
-    
-    if not to_account_result.data or len(to_account_result.data) == 0:
-        raise ValueError(f"Destination account {to_account_id} not found or not accessible")
     
     # Fetch 'from_recurrent_transaction' system category
     if transfer_category_id is None:
@@ -346,110 +236,57 @@ async def create_recurring_transfer(
         
         transfer_category_id = category_result.data[0]["id"]
     
-    # Step 1: Create outgoing recurring rule
-    outgoing_data = {
-        "user_id": user_id,
-        "account_id": from_account_id,
-        "category_id": transfer_category_id,
-        "flow_type": "outcome",
-        "amount": amount,
-        "description": description_outgoing,
-        "frequency": frequency,
-        "interval": interval,
-        "start_date": start_date,
-        "next_run_date": start_date,
-        "is_active": is_active
-    }
+    # Call RPC function for atomic recurring transfer creation
+    result = supabase_client.rpc(
+        'create_recurring_transfer',
+        {
+            'p_user_id': user_id,
+            'p_from_account_id': from_account_id,
+            'p_to_account_id': to_account_id,
+            'p_amount': amount,
+            'p_description_outgoing': description_outgoing,
+            'p_description_incoming': description_incoming,
+            'p_frequency': frequency,
+            'p_interval': interval,
+            'p_start_date': start_date,
+            'p_by_weekday': by_weekday,
+            'p_by_monthday': by_monthday,
+            'p_end_date': end_date,
+            'p_is_active': is_active,
+            'p_transfer_category_id': transfer_category_id
+        }
+    ).execute()
     
-    if by_weekday is not None:
-        outgoing_data["by_weekday"] = by_weekday
-    if by_monthday is not None:
-        outgoing_data["by_monthday"] = by_monthday
-    if end_date is not None:
-        outgoing_data["end_date"] = end_date
+    if not result.data or len(result.data) == 0:
+        raise Exception("RPC create_recurring_transfer failed: no data returned")
     
+    rpc_result = result.data[0]
+    outgoing_id = rpc_result['outgoing_rule_id']
+    incoming_id = rpc_result['incoming_rule_id']
+    
+    # Fetch both rules for return value consistency
     outgoing_result = (
         supabase_client.table("recurring_transaction")
-        .insert(outgoing_data)
-        .execute()
-    )
-    
-    if not outgoing_result.data or len(outgoing_result.data) == 0:
-        raise Exception("Failed to create outgoing recurring rule")
-    
-    outgoing_rule = outgoing_result.data[0]
-    outgoing_id = outgoing_rule["id"]
-    
-    # Step 2: Create incoming recurring rule
-    incoming_data = {
-        "user_id": user_id,
-        "account_id": to_account_id,
-        "category_id": transfer_category_id,
-        "flow_type": "income",
-        "amount": amount,
-        "description": description_incoming,
-        "frequency": frequency,
-        "interval": interval,
-        "start_date": start_date,
-        "next_run_date": start_date,
-        "is_active": is_active,
-        "paired_recurring_transaction_id": outgoing_id
-    }
-    
-    if by_weekday is not None:
-        incoming_data["by_weekday"] = by_weekday
-    if by_monthday is not None:
-        incoming_data["by_monthday"] = by_monthday
-    if end_date is not None:
-        incoming_data["end_date"] = end_date
-    
-    incoming_result = (
-        supabase_client.table("recurring_transaction")
-        .insert(incoming_data)
-        .execute()
-    )
-    
-    if not incoming_result.data or len(incoming_result.data) == 0:
-        # Rollback: delete outgoing rule
-        (
-            supabase_client.table("recurring_transaction")
-            .delete()
-            .eq("id", outgoing_id)
-            .execute()
-        )
-        raise Exception("Failed to create incoming recurring rule")
-    
-    incoming_rule = incoming_result.data[0]
-    incoming_id = incoming_rule["id"]
-    
-    # Step 3: Update outgoing rule to link back to incoming
-    update_result = (
-        supabase_client.table("recurring_transaction")
-        .update({"paired_recurring_transaction_id": incoming_id})
+        .select("*")
         .eq("id", outgoing_id)
         .execute()
     )
     
-    if not update_result.data or len(update_result.data) == 0:
-        # Rollback: delete both rules
-        (
-            supabase_client.table("recurring_transaction")
-            .delete()
-            .eq("id", outgoing_id)
-            .execute()
-        )
-        (
-            supabase_client.table("recurring_transaction")
-            .delete()
-            .eq("id", incoming_id)
-            .execute()
-        )
-        raise Exception("Failed to link paired recurring rules")
+    incoming_result = (
+        supabase_client.table("recurring_transaction")
+        .select("*")
+        .eq("id", incoming_id)
+        .execute()
+    )
     
-    outgoing_rule = update_result.data[0]
+    if not outgoing_result.data or not incoming_result.data:
+        raise Exception("Failed to fetch created recurring rules")
+    
+    outgoing_rule = outgoing_result.data[0]
+    incoming_rule = incoming_result.data[0]
     
     logger.info(
-        f"Recurring transfer created: {outgoing_id} (out) <-> {incoming_id} (in)"
+        f"Recurring transfer created via RPC: {outgoing_id} (out) <-> {incoming_id} (in)"
     )
     
     return (outgoing_rule, incoming_rule)
