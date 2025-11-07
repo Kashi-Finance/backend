@@ -25,6 +25,33 @@ backend/
     └── ...              # Future: Supabase client, RLS-compliant queries
 ```
 
+## Testing
+
+### Unit Tests (Default)
+
+```bash
+pytest tests/
+```
+
+All tests use mocks by default. Safe for CI/CD. Fast (~2-5 seconds).
+
+### Integration Tests
+
+```bash
+# 1. Navigate to backend directory
+cd /Users/andres/Documents/Kashi/backend
+
+# 2. Create/renew test user (updates .env with fresh token)
+./scripts/integration/00-create-test-user.sh
+
+# 3. Run all tests
+./scripts/integration/run-all.sh
+
+# Or run individual test:
+source scripts/integration/setup-env.sh
+./scripts/integration/11-profile-get.sh
+```
+
 ## Flujo 
 Dev trabaja en feature/cualquier-cosa.
 Hace push a esa rama.
