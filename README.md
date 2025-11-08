@@ -41,10 +41,16 @@ All tests use mocks by default. Safe for CI/CD. Fast (~2-5 seconds).
 # 1. Navigate to backend directory
 cd /Users/andres/Documents/Kashi/backend
 
-# 2. Create/renew test user (updates .env with fresh token)
+# 2. Setup environment variables
+source scripts/integration/setup-env.sh
+
+# 3. Start backend server in a separate terminal
+./scripts/integration/START-BACKEND.sh
+
+# 4. Create/renew test user (updates .env with fresh token)
 ./scripts/integration/00-create-test-user.sh
 
-# 3. Run all tests
+# 5. Run all tests
 ./scripts/integration/run-all.sh
 
 # Or run individual test:
