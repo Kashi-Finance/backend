@@ -1,0 +1,48 @@
+name: Deploy migrations to Staging
+
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    # Use Environment "staging".
+    environment:
+      name: staging
+
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.STAGING_DB_PASSWORD }}
+      SUPABASE_PROJECT_ID: ${{ secrets.STAGING_PROJECT_ID }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Safety check
+        run: |
+          echo "Last commit message:"
+          git log -1 --pretty=%s
+          if ! git log -1 --pretty=%s | grep -qi "merge pull request"; then
+            echo "Direct push detected. Please use a pull request to deploy to production."
+            exit 1
+          fi
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      
+      - name: Authenticate Supabase CLI
+        run: |
+            supabase login --token "$SUPABASE_ACCESS_TOKEN"
+
+      - name: Link to Supabase Staging project
+        run: supabase link --project-ref $SUPABASE_PROJECT_ID --password $SUPABASE_DB_PASSWORD
+      
+      - name: Push DB schema/state to Staging
+        run: supabase db push --password $SUPABASE_DB_PASSWORD
