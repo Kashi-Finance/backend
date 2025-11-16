@@ -19,8 +19,8 @@ INSERT INTO public.category (user_id, key, name, flow_type, created_at, updated_
   (NULL, 'initial_balance', 'Initial Balance (Outcome)', 'outcome', now(), now()),
   
   -- Manual balance adjustment categories (for corrections)
-  (NULL, 'balance_update_income', 'Manual Balance Adjustment (Income)', 'income', now(), now()),
-  (NULL, 'balance_update_outcome', 'Manual Balance Adjustment (Outcome)', 'outcome', now(), now()),
+  (NULL, 'balance_update', 'Manual Balance Adjustment (Income)', 'income', now(), now()),
+  (NULL, 'balance_update', 'Manual Balance Adjustment (Outcome)', 'outcome', now(), now()),
   
   -- Transfer categories (for internal account transfers)
   (NULL, 'transfer', 'Transfer (Income)', 'income', now(), now()),
@@ -50,8 +50,8 @@ ORDER BY key, flow_type;
 -- 
 -- | key                    | name                                  | flow_type | is_system_category |
 -- |------------------------|---------------------------------------|-----------|-------------------|
--- | balance_update_income  | Manual Balance Adjustment (Income)    | income    | true              |
--- | balance_update_outcome | Manual Balance Adjustment (Outcome)   | outcome   | true              |
+-- | balance_update         | Manual Balance Adjustment (Income)    | income    | true              |
+-- | balance_update         | Manual Balance Adjustment (Outcome)   | outcome   | true              |
 -- | general                | General Income                        | income    | true              |
 -- | general                | General Outcome                       | outcome   | true              |
 -- | initial_balance        | Initial Balance (Income)              | income    | true              |
