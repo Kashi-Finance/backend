@@ -33,6 +33,114 @@ This means:
 
 ---
 
+## 0.1. Standard Response Formats
+
+All endpoints in this API follow consistent response format patterns to ensure predictable integration with the mobile app.
+
+### List Responses (200 OK)
+
+All list endpoints (GET /transactions, GET /budgets, GET /invoices, etc.) return responses in this format:
+
+```json
+{
+  "<resource_type>": [...],  // e.g., "transactions", "budgets", "invoices"
+  "count": 42,               // Total number of items returned
+  "limit": 50,               // Optional: pagination limit (if applicable)
+  "offset": 0                // Optional: pagination offset (if applicable)
+}
+```
+
+**Example:**
+```json
+{
+  "transactions": [...],
+  "count": 15,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+### Creation Responses (201 CREATED)
+
+All resource creation endpoints return the full created object:
+
+```json
+{
+  "status": "CREATED",
+  "<resource_type>_id": "uuid-here",
+  "<resource_type>": { ...full_object },
+  "message": "Success message"
+}
+```
+
+**Example:**
+```json
+{
+  "status": "CREATED",
+  "transaction_id": "123e4567-e89b-12d3-a456-426614174000",
+  "transaction": { ...full_transaction },
+  "message": "Transaction created successfully"
+}
+```
+
+### Update Responses (200 OK)
+
+All update endpoints return the complete updated object:
+
+```json
+{
+  "status": "UPDATED",
+  "<resource_type>_id": "uuid-here",
+  "<resource_type>": { ...full_updated_object },
+  "message": "Success message"
+}
+```
+
+### Deletion Responses (200 OK)
+
+**Soft-delete** (invoices, budgets, profiles):
+```json
+{
+  "status": "DELETED",
+  "<resource_type>_id": "uuid-here",
+  "deleted_at": "2025-11-16T10:30:00Z",
+  "message": "Success message"
+}
+```
+
+**Hard-delete** (transactions, recurring_transactions, categories):
+```json
+{
+  "status": "DELETED",
+  "<resource_type>_id": "uuid-here",
+  "message": "Success message"
+}
+```
+
+Note: Hard-delete responses do NOT include `deleted_at` because the record is permanently removed, not just marked as deleted.
+
+### Error Responses (4xx, 5xx)
+
+All error responses follow this format:
+
+```json
+{
+  "error": "error_code",
+  "details": "Human-readable error description"
+}
+```
+
+**Common error codes:**
+- `unauthorized` (401) - Missing or invalid authentication token
+- `forbidden` (403) - User not allowed to access this resource
+- `not_found` (404) - Resource doesn't exist or not accessible by user
+- `validation_error` (400) - Invalid request data
+- `out_of_scope` (400) - Request intent not supported by this endpoint
+- `conflict` (409) - Resource state conflict (e.g., duplicate entry)
+- `internal_error` (500) - Server error
+
+---
+
 ## 1. Auth & Profile
 
 These endpoints cover login context for the app and the basic user profile data needed by agents.
@@ -958,7 +1066,7 @@ Example response shape mirrors the `GET /transactions` object shown below.
 
 ### `GET /transactions`
 
-**Purpose:** Fetch user's transactions with optional filters and pagination.
+**Purpose:** Fetch user's transactions with optional filters, sorting, and pagination.
 
 **Query Params (all optional):**
 * `limit` (int, default 50, max 100) - Maximum number of transactions to return
@@ -968,6 +1076,8 @@ Example response shape mirrors the `GET /transactions` object shown below.
 * `flow_type` (string: "income" or "outcome") - Filter by transaction type
 * `from_date` (ISO-8601 string) - Filter by start date
 * `to_date` (ISO-8601 string) - Filter by end date
+* `sort_by` (string: "date" or "amount", default "date") - Field to sort by
+* `sort_order` (string: "asc" or "desc", default "desc") - Sort order
 
 **Response:**
 ```json
@@ -998,7 +1108,7 @@ Example response shape mirrors the `GET /transactions` object shown below.
 **Security:**
 * Authorization required.
 * RLS ensures users only see their own transactions.
-* Results ordered by date descending (newest first).
+* Results ordered by `sort_by` field in `sort_order` direction (default: date descending, newest first).
 
 **Status Code:** `200 OK`
 
@@ -1394,35 +1504,43 @@ The detail response includes the canonical `extracted_text` (the formatted templ
 
 ### `DELETE /invoices/{invoice_id}`
 
-**Purpose:** Permanently delete an invoice row.
+**Purpose:** Soft-delete an invoice using the `delete_invoice` RPC.
 
 **Path param:** `invoice_id` (UUID). Authorization required.
 
 **Behavior:**
-- Verifies the invoice exists and belongs to the authenticated user.
-- Deletes the invoice row and returns a success payload.
-- **Does NOT delete** the associated receipt image from Supabase Storage (storage cleanup is a separate concern).
-- **Does NOT delete** the linked transaction (transactions remain intact even if their source invoice is deleted).
-- Returns `404 Not Found` if the invoice does not exist or is not accessible by the caller.
+- Calls `delete_invoice(p_invoice_id, p_user_id)` RPC for atomic soft-delete
+- Sets `deleted_at` timestamp on the invoice
+- Only the invoice owner can soft-delete their invoice
+- Soft-deleted invoices are hidden from queries via RLS filtering on `deleted_at IS NULL`
+- **Does NOT delete** the associated receipt image from Supabase Storage (storage cleanup is a separate concern)
+- **Does NOT modify** the linked transaction (transactions remain intact even if their source invoice is soft-deleted)
+- Returns `404 Not Found` if the invoice does not exist or is not accessible by the caller
 
 **Response:**
 ```json
 {
 	"status": "DELETED",
 	"invoice_id": "...",
-	"message": "Invoice deleted successfully"
+	"deleted_at": "2025-11-16T10:30:00-06:00",
+	"message": "Invoice soft-deleted successfully"
 }
 ```
 
 **Status Codes:**
-* `200 OK` - Invoice deleted successfully
+* `200 OK` - Invoice soft-deleted successfully
 * `404 NOT FOUND` - Invoice doesn't exist or not accessible by user
 * `401 UNAUTHORIZED` - Missing or invalid authentication token
-* `500 INTERNAL SERVER ERROR` - Database deletion error
+* `500 INTERNAL SERVER ERROR` - RPC call error
+
+**Implementation Details:**
+- Uses Security Definer RPC for atomic operation
+- RPC validates ownership before soft-deleting
+- Historical invoice data remains queryable if needed
 
 **Notes:**
-* Deleting an invoice does NOT delete the linked transaction.
-* Users can separately delete the transaction via `DELETE /transactions/{transaction_id}` if needed.
+* Soft-deleting an invoice does NOT delete or modify the linked transaction
+* Users can separately delete the transaction via `DELETE /transactions/{transaction_id}` if needed
 
 ---
 
@@ -1456,11 +1574,13 @@ These map to the `budget` table and its join table to categories (`budget_catego
 
 **Request:** No body. Authorization required (Bearer token).
 
-**Query Parameters:**
-* None (returns all budgets ordered by creation date)
+**Query Parameters (all optional):**
+* `frequency` (string: "daily" | "weekly" | "monthly" | "yearly" | "once") - Filter by budget frequency
+* `is_active` (boolean: true | false) - Filter by active status
 
 **Behavior:**
 - Returns all user's budgets with their linked categories
+- Supports filtering by frequency and active status
 - Uses JOIN on `budget_category` → `category` to fetch category details
 - Ordered by `created_at` descending (newest first)
 - Only accessible to the budget owner (RLS enforced)
@@ -1740,46 +1860,45 @@ These map to the `budget` table and its join table to categories (`budget_catego
 
 ### `DELETE /budgets/{budget_id}`
 
-**Purpose:** Delete a budget following DB deletion rules.
+**Purpose:** Soft-delete a budget using the `delete_budget` RPC.
 
 **Request:** No body. Authorization required (Bearer token).
 
 **Path Parameters:**
-* `budget_id` - UUID of the budget to delete
+* `budget_id` - UUID of the budget to soft-delete
 
 **Behavior:**
-- Follows exact DB deletion rule from `DB-documentation.md`:
-  1. Delete all `budget_category` links tied to the budget
-  2. Delete the budget
-  3. Never delete transactions (they remain as financial history)
-- Only the budget owner can delete their budget
-- Returns count of unlinked categories for transparency
+- Calls `delete_budget(p_budget_id, p_user_id)` RPC for atomic soft-delete
+- Sets `deleted_at` timestamp on the budget
+- `budget_category` junction rows remain for historical analysis
+- Only the budget owner can soft-delete their budget
+- Soft-deleted budgets are hidden from queries via RLS filtering on `deleted_at IS NULL`
 
 **Response:**
 ```json
 {
   "status": "DELETED",
   "budget_id": "budget-uuid",
-  "categories_unlinked": 2,
-  "message": "Budget deleted successfully. 2 category link(s) removed."
+  "deleted_at": "2025-11-16T10:30:00-06:00",
+  "message": "Budget soft-deleted successfully"
 }
 ```
 
 **Status Codes:**
-* `200 OK` - Budget deleted successfully
+* `200 OK` - Budget soft-deleted successfully
 * `401 UNAUTHORIZED` - Missing or invalid authentication token
 * `404 NOT FOUND` - Budget not found or not accessible by user
-* `500 INTERNAL SERVER ERROR` - Database deletion error
+* `500 INTERNAL SERVER ERROR` - RPC call error
 
-**DB Rule Enforcement:**
-This endpoint follows the deletion rule:
-1. Delete all `budget_category` links where `budget_id` matches AND `user_id` matches
-2. Delete the budget row
-3. Transactions are NEVER deleted (remain as history)
+**Implementation Details:**
+- Uses Security Definer RPC for atomic operation
+- RPC validates ownership before soft-deleting
+- Junction table rows preserved (not deleted)
+- Historical budget data remains queryable if needed
 
 **Security:**
-* RLS enforces user can only delete their own budgets
-* Cascade deletion is handled explicitly in service layer
+* RLS enforces user can only soft-delete their own budgets
+* RPC validates `p_user_id` matches budget owner
 
 ---
 
@@ -3255,14 +3374,14 @@ Invoice flow:
 * If `DRAFT`, show preview. Let user pick `account_id`, `category_id` from `/accounts` + `/categories`.
 * On confirm → `POST /invoices/commit`.
 
-Wishlist / metas / compras:
+Wishlist / goals / shoppings:
 * User writes goal or taps "dame opciones" → `POST /recommendations/query`.
 * Show `NEEDS_CLARIFICATION` Q&A loop OR show ranked `OK` cards.
 * Allow "Guardar en mi wishlist" could be `POST /wishlists` + `POST /wishlists/{wishlist_id}/items` or a direct `POST /wishlists/{wishlist_id}/items` if the goal already exists.
 
-Budgets & suscripciones:
+Budgets & suscriptions:
 * `/budgets` for spending caps (frequency can be `once`).
 * `/recurring-transactions` for repeating charges/income (frequency cannot be `once`; supports `end_date`, `next_run_date`).
 
-Activity / historia financiera:
+Activity / financial history:
 * `/transactions` powers the activity feed and balance per account. Treat transactions with `paired_transaction_id` as transfers, not spending.

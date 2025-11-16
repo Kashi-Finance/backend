@@ -40,8 +40,8 @@ System categories are **global, immutable categories** (where `user_id IS NULL` 
 |:----|:----------|:-----|:--------|
 | `initial_balance` | `income` | Initial Balance (Income) | Opening balance for income-type accounts |
 | `initial_balance` | `outcome` | Initial Balance (Outcome) | Opening balance for outcome-type accounts |
-| `balance_update_income` | `income` | Manual Balance Adjustment (Income) | Manual positive balance corrections |
-| `balance_update_outcome` | `outcome` | Manual Balance Adjustment (Outcome) | Manual negative balance corrections |
+| `balance_update` | `income` | Manual Balance Adjustment (Income) | Manual positive balance corrections |
+| `balance_update` | `outcome` | Manual Balance Adjustment (Outcome) | Manual negative balance corrections |
 | `transfer` | `income` | Transfer (Income) | Destination side of internal transfers |
 | `transfer` | `outcome` | Transfer (Outcome) | Source side of internal transfers |
 | `general` | `income` | General Income | Default category for uncategorized income |
@@ -144,7 +144,6 @@ Financial accounts owned by users (bank accounts, cash, credit cards, loans, etc
 | `currency` | TEXT | `NOT NULL` | ISO currency code | `GTQ` |
 | `cached_balance` | NUMERIC(12,2) | `NOT NULL DEFAULT 0` | Cached balance (performance optimization) | `1500.00` |
 | `deleted_at` | TIMESTAMPTZ | `NULLABLE` | Soft-delete timestamp | `2025-11-01T10:00:00-06:00` |
-| `deleted_by` | UUID | `NULLABLE` | User who deleted (or NULL if system) | `38f7d540-23fa-497a-8df2-3ab9cbe13da5` |
 | `created_at` | TIMESTAMPTZ | `DEFAULT now()` | Row creation timestamp | `2025-10-29T08:15:00-06:00` |
 | `updated_at` | TIMESTAMPTZ | `DEFAULT now()` | Last update timestamp | `2025-10-31T08:15:00-06:00` |
 
@@ -235,7 +234,6 @@ User-uploaded invoices/receipts with OCR-extracted text.
 | `storage_path` | TEXT | `NOT NULL` | Path in Supabase Storage | `invoices/user123/inv-abc.jpg` |
 | `extracted_text` | TEXT | `NOT NULL` | OCR text (see format below) | See below |
 | `deleted_at` | TIMESTAMPTZ | `NULLABLE` | Soft-delete timestamp | `2025-11-01T10:00:00-06:00` |
-| `deleted_by` | UUID | `NULLABLE` | User who deleted | `38f7d540-23fa-497a-8df2-3ab9cbe13da5` |
 | `created_at` | TIMESTAMPTZ | `DEFAULT now()` | Row creation timestamp | `2025-10-30T14:30:00-06:00` |
 | `updated_at` | TIMESTAMPTZ | `DEFAULT now()` | Last update timestamp | `2025-10-30T14:30:00-06:00` |
 
@@ -259,7 +257,7 @@ The `extracted_text` field stores OCR text in a **canonical format** defined by 
 **Delete Behavior:**
 
 When deleting an invoice:
-1. Set `deleted_at` and `deleted_by` (soft-delete)
+1. Set `deleted_at` (soft-delete)
 2. **Archive the storage file** (move to archive path, do not immediately delete)
 3. Schedule background purge based on retention policy (e.g., 90 days)
 4. If the invoice is referenced by transactions, those transactions keep the reference (invoice_id) but see NULL due to RLS filtering
@@ -289,7 +287,6 @@ Templates for generating recurring transactions automatically.
 | `end_date` | DATE | `NULLABLE` | Optional end date | `2026-12-31` |
 | `is_active` | BOOLEAN | `NOT NULL DEFAULT true` | Active/inactive status | `true` |
 | `deleted_at` | TIMESTAMPTZ | `NULLABLE` | Soft-delete timestamp | `NULL` |
-| `deleted_by` | UUID | `NULLABLE` | User who deleted | `NULL` |
 | `created_at` | TIMESTAMPTZ | `DEFAULT now()` | Row creation timestamp | `2025-10-30T10:00:00-06:00` |
 | `updated_at` | TIMESTAMPTZ | `DEFAULT now()` | Last update timestamp | `2025-10-30T10:00:00-06:00` |
 
@@ -316,7 +313,7 @@ Transfers between accounts are modeled as **two linked transactions** (one outco
 **Delete Behavior:**
 
 When deleting a recurring transaction template:
-1. Set `deleted_at` and `deleted_by` (soft-delete)
+1. Set `deleted_at` (soft-delete)
 2. Stop future materialization (backend checks `deleted_at` before creating transactions)
 3. **Already-created transactions are NOT affected** (they keep `recurring_transaction_id` reference)
 4. If part of a recurring transfer pair, consider soft-deleting both templates together
@@ -343,7 +340,6 @@ Individual financial transactions (income or outcome). Account balance is derive
 | `recurring_transaction_id` | UUID (FK) | `NULLABLE`<br/>`REFERENCES recurring_transaction(id) ON DELETE SET NULL` | Template that generated this transaction | `rt-7a8b9c0d-1e2f-3a4b-5c6d` |
 | `system_generated_key` | TEXT | `NULLABLE` | Human-readable system marker | `recurring_rule_auto` |
 | `deleted_at` | TIMESTAMPTZ | `NULLABLE` | Soft-delete timestamp | `NULL` |
-| `deleted_by` | UUID | `NULLABLE` | User who deleted | `NULL` |
 | `created_at` | TIMESTAMPTZ | `DEFAULT now()` | Row creation timestamp | `2025-10-30T14:30:00-06:00` |
 | `updated_at` | TIMESTAMPTZ | `DEFAULT now()` | Last update timestamp | `2025-10-30T14:30:00-06:00` |
 
@@ -384,7 +380,7 @@ Individual financial transactions (income or outcome). Account balance is derive
 **Delete Behavior:**
 
 When deleting a transaction:
-1. Set `deleted_at` and `deleted_by` (soft-delete)
+1. Set `deleted_at` (soft-delete)
 2. Decrement `account.cached_balance` atomically using triggers/RPCs
 3. If the transaction is part of a budget period, decrement `budget.cached_consumption`
 4. If part of a transfer pair (has `paired_transaction_id`), consider deleting both sides together
@@ -413,7 +409,6 @@ Spending limits that can be one-time or recurring.
 | `is_active` | BOOLEAN | `NOT NULL DEFAULT true` | Active/inactive status | `true` |
 | `cached_consumption` | NUMERIC(12,2) | `NOT NULL DEFAULT 0` | Current period consumption (cache) | `320.50` |
 | `deleted_at` | TIMESTAMPTZ | `NULLABLE` | Soft-delete timestamp | `NULL` |
-| `deleted_by` | UUID | `NULLABLE` | User who deleted | `NULL` |
 | `created_at` | TIMESTAMPTZ | `DEFAULT now()` | Row creation timestamp | `2025-10-30T10:00:00-06:00` |
 | `updated_at` | TIMESTAMPTZ | `DEFAULT now()` | Last update timestamp | `2025-11-15T14:00:00-06:00` |
 
@@ -438,7 +433,7 @@ Spending limits that can be one-time or recurring.
 **Delete Behavior:**
 
 When deleting a budget:
-1. Set `deleted_at` and `deleted_by` (soft-delete)
+1. Set `deleted_at` (soft-delete)
 2. Delete all `budget_category` rows linking this budget to categories (CASCADE)
 3. Budget stops applying but historical data is retained for reports
 
@@ -600,7 +595,6 @@ Most user-initiated deletions are **soft-deletes**, not physical deletions.
 
 **Soft-delete columns (added to tables):**
 - `deleted_at` (TIMESTAMPTZ NULL) — Timestamp when deleted
-- `deleted_by` (UUID NULL) — User who performed the delete (or NULL if system)
 
 **RLS enforcement:**
 - User queries automatically filter `deleted_at IS NULL`
