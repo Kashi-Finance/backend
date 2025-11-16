@@ -30,7 +30,7 @@ Kashi Finances uses PostgreSQL (via Supabase) to store personal finance data, in
 
 ## System Categories
 
-System categories are **global, immutable categories** (where `user_id IS NULL` and `key IS NOT NULL`) that cannot be deleted or modified by users. They are created and managed only by the system (`service_role`).
+System categories are **global, immutable categories** (where `user_id IS NULL` and `key IS NOT NULL`) that cannot be deleted or modified by users. They are created and managed only by the system via database migrations.
 
 **CRITICAL:** The `(key, flow_type)` combination is UNIQUE. Each system category key exists exactly once per `flow_type`.
 
@@ -543,33 +543,33 @@ All user-owned tables enforce **Row-Level Security (RLS)** to automatically isol
 
 ```sql
 -- SELECT: Users see only non-deleted rows they own
-(user_id = auth.uid() AND deleted_at IS NULL) OR auth.role() = 'service_role'
+user_id = auth.uid() AND deleted_at IS NULL
 
 -- INSERT: Users can only insert for themselves
-user_id = auth.uid() OR auth.role() = 'service_role'
+user_id = auth.uid()
 
 -- UPDATE: Users can only update non-deleted rows they own
-USING: (user_id = auth.uid() AND deleted_at IS NULL) OR auth.role() = 'service_role'
-WITH CHECK: user_id = auth.uid() OR auth.role() = 'service_role'
+USING: user_id = auth.uid() AND deleted_at IS NULL
+WITH CHECK: user_id = auth.uid()
 
 -- DELETE: Users can only delete rows they own
-user_id = auth.uid() OR auth.role() = 'service_role'
+user_id = auth.uid()
 ```
 
 **For category table (special case):**
 
 ```sql
 -- SELECT: Users see their own categories AND global system categories
-user_id = auth.uid() OR user_id IS NULL OR auth.role() = 'service_role'
+user_id = auth.uid() OR user_id IS NULL
 
 -- INSERT: Users can only create personal categories (key must be NULL)
-(user_id = auth.uid() AND key IS NULL) OR auth.role() = 'service_role'
+user_id = auth.uid() AND key IS NULL
 
 -- UPDATE: Users can only update their own categories (not system categories)
-(user_id = auth.uid() AND key IS NULL) OR auth.role() = 'service_role'
+user_id = auth.uid() AND key IS NULL
 
 -- DELETE: Users can only delete their own categories (not system categories)
-(user_id = auth.uid() AND key IS NULL) OR auth.role() = 'service_role'
+user_id = auth.uid() AND key IS NULL
 ```
 
 **For wishlist_item table (indirect ownership):**
@@ -579,19 +579,9 @@ user_id = auth.uid() OR user_id IS NULL OR auth.role() = 'service_role'
 EXISTS (
   SELECT 1 FROM public.wishlist w
   WHERE w.id = wishlist_item.wishlist_id
-    AND (w.user_id = auth.uid() OR auth.role() = 'service_role')
+    AND w.user_id = auth.uid()
 )
 ```
-
-### service_role Access
-
-- `service_role` is a special Supabase role used by the backend service
-- It **bypasses all RLS policies** and can see all data (including soft-deleted rows)
-- Used for:
-  - Admin operations
-  - Background jobs (reconciliation, materialization)
-  - System maintenance
-  - GDPR hard-delete procedures
 
 ---
 
@@ -614,7 +604,7 @@ Most user-initiated deletions are **soft-deletes**, not physical deletions.
 
 **RLS enforcement:**
 - User queries automatically filter `deleted_at IS NULL`
-- `service_role` can see all rows (including soft-deleted)
+- Backend services can query soft-deleted rows when needed for recovery/audit operations
 
 **Service layer behavior:**
 - DELETE endpoints call soft-delete RPCs instead of physical deletes
@@ -625,9 +615,10 @@ Most user-initiated deletions are **soft-deletes**, not physical deletions.
 
 For GDPR "right to be forgotten" requests:
 
-1. Use admin-only RPCs (not exposed to regular API)
+1. Use dedicated GDPR compliance RPCs (not exposed to regular API)
 2. Requires approval and logging
 3. Must wait for retention window to expire (e.g., 90 days after soft-delete)
+4. Physically removes data from database
 4. Permanently removes rows and anonymizes related data
 5. Archives invoice storage files before deletion
 
@@ -824,26 +815,9 @@ wishlist (1) → (N) wishlist_item
 
 ---
 
-## Migration and Deployment Notes
-
-Since you're deploying from scratch (no existing data):
-
-1. Run `DB-DDL.txt` directly (no migrations needed)
-2. Create system categories via `service_role` after schema deployment:
-   - `initial_balance` (income + outcome)
-   - `balance_update_income`
-   - `balance_update_outcome`
-   - `transfer` (income + outcome)
-   - `general` (income + outcome)
-3. Test RLS policies with test users
-4. Verify indexes are created correctly
-5. Run smoke tests for CRUD operations
-
----
-
 ## Best Practices
 
-1. **Always use RLS** — Never bypass RLS in application code (except for service_role operations)
+1. **Always use RLS** — Never bypass RLS in application code
 2. **Soft-delete by default** — Use soft-delete RPCs for user operations
 3. **Recompute regularly** — Run reconciliation jobs to verify cached balances
 4. **Test concurrency** — Use row-level locking (`SELECT ... FOR UPDATE`) in RPCs for critical operations
