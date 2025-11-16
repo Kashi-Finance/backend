@@ -2367,6 +2367,31 @@ Transfers represent internal money movements between the user's own accounts. Ea
 5. **Same User:** Both accounts must belong to the authenticated user
 6. **System Categories:** Transfers use dedicated system categories, not user categories
 
+**Transfer Editing Rules (CRITICAL):**
+
+Transfers are **atomic two-leg structures** that must always stay synchronized. All edit operations MUST update both transactions identically.
+
+1. **Use `PATCH /transfers/{id}` to edit transfers**
+   - Accepts `{id}` of either transaction in the pair
+   - Updates both transactions atomically with identical values
+   - Allowed fields: `amount`, `date`, `description`
+   - Immutable fields: `category_id`, `flow_type`, `paired_transaction_id`, `account_id`
+
+2. **`PATCH /transactions/{id}` rejects transfer edits**
+   - If transaction has `paired_transaction_id` AND category key is `transfer` or `from_recurrent_transaction`
+   - Returns: `400 BAD_REQUEST` with error `"cannot_edit_transfer"`
+   - Message: `"This transaction is part of an internal transfer. Use PATCH /transfers/{id} to edit it."`
+
+3. **Deletion behavior**
+   - `DELETE /transactions/{id}` detects transfers and calls `delete_transfer` RPC
+   - Both paired transactions deleted atomically
+   - Single transactions (non-transfers) deleted normally
+
+4. **Core invariant**
+   - A transfer = two synchronized transactions
+   - No operation may leave them out of sync
+   - All create/update/delete operations are atomic
+
 ---
 
 ### `POST /transfers`
@@ -2455,6 +2480,116 @@ Returns an array of two transaction objects (same schema as `/transactions`). Th
 - Transfer from account to itself: Allowed (but creates neutral effect)
 - Negative amount: Rejected at validation layer (amount must be > 0)
 - Partial failure: Atomicity ensures both transactions created or neither
+
+---
+
+### `PATCH /transfers/{id}`
+
+**Purpose:** Update an existing transfer by updating both paired transactions atomically.
+
+**Request:** Authorization required (Bearer token).
+
+**URL Parameter:**
+- `id`: UUID of either transaction in the transfer pair
+
+**Request Body:**
+```json
+{
+  "amount": 600.00,
+  "date": "2025-11-04",
+  "description": "Updated transfer description"
+}
+```
+
+**Request Fields (all optional, at least one required):**
+- `amount`: New transfer amount (must be > 0)
+- `date`: New transfer date (YYYY-MM-DD format)
+- `description`: New description for both transactions
+
+**Immutable Fields:**
+The following fields CANNOT be changed after a transfer is created:
+- `category_id` (transfers must use system 'transfer' category)
+- `flow_type` (outcome/income are fixed by design)
+- `paired_transaction_id` (cannot be changed)
+- `from_account_id` / `to_account_id` (would break transfer structure)
+
+**Behavior:**
+1. Validates transaction exists and is a transfer (has `paired_transaction_id`)
+2. Validates transaction belongs to authenticated user
+3. Updates BOTH paired transactions with the same values atomically
+4. Returns both updated transaction records
+
+**Response:**
+Returns both updated transactions (same schema as `POST /transfers`).
+
+```json
+{
+  "status": "UPDATED",
+  "transactions": [
+    {
+      "id": "txn-uuid-out",
+      "user_id": "user-uuid",
+      "account_id": "acct-uuid-source",
+      "category_id": "cat-uuid-transfer",
+      "invoice_id": null,
+      "flow_type": "outcome",
+      "amount": 600.00,
+      "date": "2025-11-04T00:00:00Z",
+      "description": "Updated transfer description",
+      "paired_transaction_id": "txn-uuid-in",
+      "created_at": "2025-11-03T10:15:00Z",
+      "updated_at": "2025-11-03T14:22:00Z"
+    },
+    {
+      "id": "txn-uuid-in",
+      "user_id": "user-uuid",
+      "account_id": "acct-uuid-destination",
+      "category_id": "cat-uuid-transfer",
+      "invoice_id": null,
+      "flow_type": "income",
+      "amount": 600.00,
+      "date": "2025-11-04T00:00:00Z",
+      "description": "Updated transfer description",
+      "paired_transaction_id": "txn-uuid-out",
+      "created_at": "2025-11-03T10:15:00Z",
+      "updated_at": "2025-11-03T14:22:00Z"
+    }
+  ],
+  "message": "Transfer updated successfully"
+}
+```
+
+**Status Codes:**
+* `200 OK` - Transfer updated successfully
+* `400 BAD REQUEST` - Not a transfer, validation error, or no fields provided
+* `401 UNAUTHORIZED` - Missing or invalid authentication token
+* `404 NOT FOUND` - Transaction not found or not accessible
+* `500 INTERNAL SERVER ERROR` - Database error
+
+**Security:**
+* RPC validates transaction is a transfer and belongs to user
+* Both paired transactions updated atomically (all-or-nothing)
+* Cannot modify account assignments or break transfer structure
+
+**Important Rules:**
+1. **Transfers are atomic two-leg structures**: Both transactions MUST stay synchronized
+2. **Use this endpoint to edit transfers**: Do NOT use `PATCH /transactions/{id}`
+3. **Identical updates**: Both transactions receive the exact same field updates
+4. **Partial updates allowed**: Only provided fields are updated, others remain unchanged
+
+**Rejection Behavior:**
+If you attempt to edit a transfer via `PATCH /transactions/{id}`, you will receive:
+```json
+{
+  "error": "cannot_edit_transfer",
+  "details": "This transaction is part of an internal transfer. Use PATCH /transfers/{id} to edit it."
+}
+```
+
+**Edge Cases:**
+- Updating only description: Amount and date remain unchanged
+- Updating to negative amount: Rejected at validation layer
+- Partial failure: Atomicity ensures both transactions updated or neither
 
 ---
 
