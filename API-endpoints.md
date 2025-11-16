@@ -797,34 +797,72 @@ Examples:
 
 ### `DELETE /categories/{category_id}`
 
-**Purpose:** Delete a user category following DB deletion rules.
+**Purpose:** Delete a user category with flow-type aware transaction reassignment.
 
-**Request:** No body. Authorization required (Bearer token).
+**Request:** Authorization required (Bearer token).
 
 **Path Parameters:**
 - `category_id` (string, UUID): The category ID to delete
 
-**Deletion Rules:**
-1. **Reassign all transactions** using this category to the system `general` category
-2. **Remove all budget_category links** referencing this category
-3. **Delete the category** from the database
-4. **System categories CANNOT be deleted** (returns 400)
+**Query Parameters:**
+- `cascade` (boolean, optional, default=false): Deletion mode
+  - `false` (default, **RECOMMENDED**): Reassign transactions to flow-type-matched `general` category
+  - `true` (**DESTRUCTIVE**): Delete all transactions associated with this category
+
+**Deletion Modes:**
+
+**Mode 1: Reassign (default, `cascade=false`)**
+1. Determine the `flow_type` of the category being deleted
+2. Find matching system `general` category with same `flow_type`:
+   - For `outcome` category → reassign to `general` (outcome)
+   - For `income` category → reassign to `general` (income)
+3. Reassign all transactions to the matched general category
+4. Remove all `budget_category` links
+5. Delete the category
+
+**Mode 2: Cascade Delete (`cascade=true`)**
+1. **WARNING: Permanently deletes all transactions** in this category
+2. Removes all `budget_category` links
+3. Deletes the category
+4. Cannot be undone
+
+**Flow-Type Matching:**
+The reassign mode ensures data integrity by matching flow types:
+- Deleting "Groceries" (outcome) → transactions go to "General" (outcome)
+- Deleting "Freelance" (income) → transactions go to "General" (income)
+- This prevents mixing income and outcome transactions
+
+**Protected Categories:**
+- **System categories CANNOT be deleted** (returns 400)
+- System categories are identified by `user_id IS NULL` and non-null `key` field
 
 **Behavior:**
 - Only the category owner can delete (RLS enforced)
-- System categories are protected from deletion
-- Returns count of transactions reassigned and budget links removed
 - All DB operations happen within a transaction (atomic)
 - Returns 404 if category doesn't exist or doesn't belong to user
+- Frontend should warn user about data loss when using `cascade=true`
 
-**Response:**
+**Response (Reassign Mode, `cascade=false`):**
 ```json
 {
   "status": "DELETED",
   "category_id": "category-uuid-456",
   "transactions_reassigned": 15,
   "budget_links_removed": 2,
-  "message": "Category deleted successfully. 15 transaction(s) reassigned to 'general', 2 budget link(s) removed."
+  "transactions_deleted": 0,
+  "message": "Category deleted successfully (REASSIGN). 15 transaction(s) reassigned to flow-type-matched 'general' category, 2 budget link(s) removed."
+}
+```
+
+**Response (Cascade Mode, `cascade=true`):**
+```json
+{
+  "status": "DELETED",
+  "category_id": "category-uuid-456",
+  "transactions_reassigned": 0,
+  "budget_links_removed": 2,
+  "transactions_deleted": 15,
+  "message": "Category deleted successfully (CASCADE). 15 transaction(s) permanently deleted, 2 budget link(s) removed."
 }
 ```
 
@@ -841,10 +879,11 @@ Examples:
 - All DB operations are transactional (if any step fails, nothing is deleted)
 
 **Important Notes:**
-- Frontend should warn user that transactions will be reassigned to "General" category
-- Budget links are removed automatically (budgets themselves are NOT deleted)
+- **Default mode is reassign** (`cascade=false`) to preserve financial history
+- Frontend should display strong warning when `cascade=true` is selected
+- Budget links are removed automatically in both modes (budgets themselves are NOT deleted)
 - Deletion is permanent and cannot be undone
-- The `general` system category is used as the reassignment target
+- Flow-type matching ensures income stays with income, outcome stays with outcome
   
 ---
 
@@ -895,7 +934,23 @@ A `transaction` is one money movement (income or outcome). It may optionally be 
 * `category_id` is required. If the user doesn't pick one in UI, the app should send the default "General" category ID.
 * Authorization required (Bearer token).
 
-**Response:** Created transaction object with full details including `transaction_id`, `created_at`, etc.
+**Response:** Created transaction object with full details. The created transaction object will include the following fields:
+
+- `id` (UUID)
+- `user_id` (UUID)
+- `account_id` (UUID)
+- `category_id` (UUID)
+- `invoice_id` (Optional UUID)
+- `flow_type` ("income" | "outcome")
+- `amount` (numeric)
+- `date` (ISO-8601)
+- `description` (optional string)
+- `embedding` (optional list - semantic vector for AI search)
+- `paired_transaction_id` (Optional UUID for transfers)
+- `created_at` (ISO-8601)
+- `updated_at` (ISO-8601)
+
+Example response shape mirrors the `GET /transactions` object shown below.
 
 **Status Code:** `201 CREATED`
 
@@ -923,8 +978,9 @@ A `transaction` is one money movement (income or outcome). It may optionally be 
 			"user_id": "...",
 			"account_id": "...",
 			"category_id": "...",
-			"invoice_id": "..." | null,
-			"flow_type": "outcome",
+      "invoice_id": "..." | null,
+      "embedding": null,
+      "flow_type": "outcome",
 			"amount": 128.50,
 			"date": "2025-10-30T14:32:00-06:00",
 			"description": "Super Despensa Familiar",
@@ -956,6 +1012,8 @@ A `transaction` is one money movement (income or outcome). It may optionally be 
 * `transaction_id` (UUID) - Transaction identifier
 
 **Response:** Single transaction object (same shape as above)
+
+Note: Each transaction object includes an optional `embedding` field (vector) used for semantic similarity search. The `embedding` value may be `null` when no vector has been generated yet.
 
 **Status Codes:**
 * `200 OK` - Transaction found and returned
