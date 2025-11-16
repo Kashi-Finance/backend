@@ -55,8 +55,8 @@ BEGIN
                 amount,
                 description,
                 date,
-                source,
                 recurring_transaction_id,
+                system_generated_key,
                 created_at,
                 updated_at
             ) VALUES (
@@ -68,8 +68,8 @@ BEGIN
                 v_rule.amount,
                 v_rule.description,
                 v_next_occurrence,  -- Use scheduled date, not today
-                'recurring',
                 v_rule.id,
+                'recurring_sync',  -- System-generated key for recurring transactions
                 NOW(),
                 NOW()
             );
