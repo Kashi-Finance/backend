@@ -20,11 +20,11 @@ Follow **ALL rules below**. Do not skip any step. Do not introduce new agents, d
   * `.github/instructions/api-architecture.instructions.md`
   * `.github/instructions/adk-agents.instructions.md`
   * `.github/instructions/db.instructions.md`
-  * `DB documentation.md`
+  * `DB-documentation.md`
 
 * Always use the **most recent version** of the Google ADK documentation, available at [https://google.github.io/adk-docs/](https://google.github.io/adk-docs/).
 
-* Always verify table fields, relationships, and deletion rules directly from **DB documentation.md** before adding or modifying any database logic.
+* Always verify table fields, relationships, and deletion rules directly from **DB-documentation.md** before adding or modifying any database logic.
 
 ---
 
@@ -70,7 +70,7 @@ Follow **ALL rules below**. Do not skip any step. Do not introduce new agents, d
 ## 5. Database and persistence
 
 * **Never write raw SQL** inline.
-* Always reference schemas, relationships, and constraints from `DB documentation.md`.
+* Always reference schemas, relationships, and constraints from `DB-documentation.md`.
 * Apply the correct **delete rules** exactly as defined.
 * Assume **Row Level Security (RLS)** is active and scope queries by `user_id = auth.uid()`.
 * For complex transactions, follow existing patterns from other backend modules.

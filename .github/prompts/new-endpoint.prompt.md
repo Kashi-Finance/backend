@@ -17,8 +17,8 @@ Follow **ALL the rules below**. Do not skip any step. Do not introduce new datab
 
   * `.github/instructions/api-architecture.instructions.md`
   * `.github/instructions/db.instructions.md`
-  * `DB documentation.md`
-* Always verify table fields, relationships, and deletion rules directly from **DB documentation.md** before adding or modifying any database logic.
+  * `DB-documentation.md`
+* Always verify table fields, relationships, and deletion rules directly from **DB-documentation.md** before adding or modifying any database logic.
 
 ---
 
@@ -49,7 +49,7 @@ Follow **ALL the rules below**. Do not skip any step. Do not introduce new datab
 ## 4. Database and Persistence
 
 * **Never write raw SQL** inline.
-* Always reference schemas, relationships, and constraints from `DB documentation.md`.
+* Always reference schemas, relationships, and constraints from `DB-documentation.md`.
 * Apply the correct **delete rules** exactly as defined.
 * Assume **Row Level Security (RLS)** is active and scope queries by `user_id = auth.uid()`.
 * For create, read, update, or delete operations, follow the existing CRUD patterns used in similar modules.
