@@ -61,7 +61,9 @@ class TestCreateTransfer:
             "amount": 500.00,
             "date": "2025-11-03",
             "description": "Transfer out",
-            "paired_transaction_id": "txn-in-uuid"
+            "paired_transaction_id": "txn-in-uuid",
+            "created_at": "2025-11-03T10:00:00Z",
+            "updated_at": "2025-11-03T10:00:00Z"
         }
         incoming_txn = {
             "id": "txn-in-uuid",
@@ -72,7 +74,9 @@ class TestCreateTransfer:
             "amount": 500.00,
             "date": "2025-11-03",
             "description": "Transfer in",
-            "paired_transaction_id": "txn-out-uuid"
+            "paired_transaction_id": "txn-out-uuid",
+            "created_at": "2025-11-03T10:00:00Z",
+            "updated_at": "2025-11-03T10:00:00Z"
         }
         mock_create.return_value = (outgoing_txn, incoming_txn)
         
@@ -90,11 +94,14 @@ class TestCreateTransfer:
         assert response.status_code == 201
         data = response.json()
         assert data["status"] == "CREATED"
-        assert data["transfer"]["from_transaction_id"] == "txn-out-uuid"
-        assert data["transfer"]["to_transaction_id"] == "txn-in-uuid"
-        assert data["transfer"]["from_account_id"] == "acct-from-uuid"
-        assert data["transfer"]["to_account_id"] == "acct-to-uuid"
-        assert data["transfer"]["amount"] == 500.00
+        assert len(data["transactions"]) == 2
+        assert data["transactions"][0]["id"] == "txn-out-uuid"
+        assert data["transactions"][1]["id"] == "txn-in-uuid"
+        assert data["transactions"][0]["account_id"] == "acct-from-uuid"
+        assert data["transactions"][1]["account_id"] == "acct-to-uuid"
+        assert data["transactions"][0]["flow_type"] == "outcome"
+        assert data["transactions"][1]["flow_type"] == "income"
+        assert data["transactions"][0]["amount"] == 500.00
         assert data["message"] == "Transfer created successfully"
     
     @patch("backend.routes.transfers.transfer_service.create_transfer")
@@ -160,12 +167,15 @@ class TestCreateRecurringTransfer:
             "description": "Savings withdrawal",
             "frequency": "monthly",
             "interval": 1,
+            "by_weekday": None,
             "by_monthday": [5],
             "start_date": "2025-11-05",
             "next_run_date": "2025-11-05",
+            "end_date": None,
             "is_active": True,
             "paired_recurring_transaction_id": "rule-in-uuid",
-            "created_at": "2025-11-03T10:00:00Z"
+            "created_at": "2025-11-03T10:00:00Z",
+            "updated_at": "2025-11-03T10:00:00Z"
         }
         incoming_rule = {
             "id": "rule-in-uuid",
@@ -177,11 +187,15 @@ class TestCreateRecurringTransfer:
             "description": "Savings deposit",
             "frequency": "monthly",
             "interval": 1,
+            "by_weekday": None,
             "by_monthday": [5],
             "start_date": "2025-11-05",
             "next_run_date": "2025-11-05",
+            "end_date": None,
             "is_active": True,
-            "paired_recurring_transaction_id": "rule-out-uuid"
+            "paired_recurring_transaction_id": "rule-out-uuid",
+            "created_at": "2025-11-03T10:00:00Z",
+            "updated_at": "2025-11-03T10:00:00Z"
         }
         mock_create.return_value = (outgoing_rule, incoming_rule)
         
@@ -204,9 +218,11 @@ class TestCreateRecurringTransfer:
         assert response.status_code == 201
         data = response.json()
         assert data["status"] == "CREATED"
-        assert data["recurring_transfer"]["outgoing_rule_id"] == "rule-out-uuid"
-        assert data["recurring_transfer"]["incoming_rule_id"] == "rule-in-uuid"
-        assert data["recurring_transfer"]["frequency"] == "monthly"
+        assert len(data["recurring_transactions"]) == 2
+        assert data["recurring_transactions"][0]["id"] == "rule-out-uuid"
+        assert data["recurring_transactions"][1]["id"] == "rule-in-uuid"
+        assert data["recurring_transactions"][0]["frequency"] == "monthly"
+        assert data["recurring_transactions"][1]["frequency"] == "monthly"
         assert data["message"] == "Recurring transfer created successfully"
     
     @patch("backend.routes.transfers.transfer_service.create_recurring_transfer")
@@ -214,15 +230,43 @@ class TestCreateRecurringTransfer:
         """Test successful recurring transfer creation (weekly)."""
         outgoing_rule = {
             "id": "rule-out-uuid",
+            "user_id": "test-user-id",
             "account_id": "acct-from-uuid",
+            "category_id": "cat-recurring-uuid",
+            "flow_type": "outcome",
+            "amount": 200.00,
+            "description": "Weekly transfer out",
             "paired_recurring_transaction_id": "rule-in-uuid",
+            "frequency": "weekly",
+            "interval": 1,
+            "by_weekday": ["monday", "friday"],
+            "by_monthday": None,
+            "start_date": "2025-11-03",
             "next_run_date": "2025-11-03",
-            "created_at": "2025-11-03T10:00:00Z"
+            "end_date": None,
+            "is_active": True,
+            "created_at": "2025-11-03T10:00:00Z",
+            "updated_at": "2025-11-03T10:00:00Z"
         }
         incoming_rule = {
             "id": "rule-in-uuid",
+            "user_id": "test-user-id",
             "account_id": "acct-to-uuid",
-            "paired_recurring_transaction_id": "rule-out-uuid"
+            "category_id": "cat-recurring-uuid",
+            "flow_type": "income",
+            "amount": 200.00,
+            "description": "Weekly transfer in",
+            "paired_recurring_transaction_id": "rule-out-uuid",
+            "frequency": "weekly",
+            "interval": 1,
+            "by_weekday": ["monday", "friday"],
+            "by_monthday": None,
+            "start_date": "2025-11-03",
+            "next_run_date": "2025-11-03",
+            "end_date": None,
+            "is_active": True,
+            "created_at": "2025-11-03T10:00:00Z",
+            "updated_at": "2025-11-03T10:00:00Z"
         }
         mock_create.return_value = (outgoing_rule, incoming_rule)
         

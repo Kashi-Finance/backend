@@ -244,7 +244,7 @@ class TestDeleteAccount:
     @patch("backend.routes.accounts.delete_account_with_transactions")
     def test_delete_account_with_transactions(self, mock_delete, mock_auth, mock_get_supabase_client, mock_account):
         """Test account deletion by deleting transactions."""
-        mock_delete.return_value = 3  # 3 transactions deleted
+        mock_delete.return_value = (2, 3)  # (2 recurring templates, 3 transactions deleted)
         
         response = client.request(
             "DELETE",
@@ -256,8 +256,9 @@ class TestDeleteAccount:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "DELETED"
-        assert data["transactions_affected"] == 3
-        assert "3 transactions deleted" in data["message"]
+        assert data["transactions_affected"] == 3  # Only transactions count
+        assert "2 recurring templates" in data["message"]
+        assert "3 transactions" in data["message"]
     
     def test_delete_account_missing_target_for_reassign(self, mock_auth, mock_get_supabase_client, mock_account):
         """Test reassign strategy without target_account_id."""

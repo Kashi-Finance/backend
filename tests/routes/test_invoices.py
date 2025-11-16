@@ -526,8 +526,8 @@ class TestInvoiceDeleteEndpoint:
         """Mock delete_invoice service function."""
         with patch("backend.routes.invoices.delete_invoice") as mock:
             async def mock_delete(*args, **kwargs):
-                # Return True indicating successful deletion
-                return True
+                # Return (success, deleted_at) tuple
+                return (True, "2025-11-16T10:30:00Z")
             mock.side_effect = mock_delete
             yield mock
     
@@ -555,7 +555,8 @@ class TestInvoiceDeleteEndpoint:
         # Validate response structure
         assert data["status"] == "DELETED"
         assert data["invoice_id"] == "test-invoice-uuid-123"
-        assert data["message"] == "Invoice deleted successfully"
+        assert "deleted_at" in data
+        assert data["message"] == "Invoice soft-deleted successfully"
         
         # Verify service was called
         mock_delete_invoice.assert_called_once()
@@ -571,7 +572,7 @@ class TestInvoiceDeleteEndpoint:
         """
         with patch("backend.routes.invoices.delete_invoice") as mock:
             async def mock_not_found(*args, **kwargs):
-                return False  # Indicates deletion failed (invoice not found)
+                return (False, None)  # Indicates deletion failed (invoice not found)
             mock.side_effect = mock_not_found
             
             response = client.delete(
@@ -614,7 +615,7 @@ class TestInvoiceDeleteEndpoint:
         """
         with patch("backend.routes.invoices.delete_invoice") as mock:
             async def mock_access_denied(*args, **kwargs):
-                return False  # RLS prevents access; deletion "fails"
+                return (False, None)  # RLS prevents access; deletion "fails"
             mock.side_effect = mock_access_denied
             
             response = client.delete(
@@ -633,7 +634,8 @@ class TestInvoiceDeleteEndpoint:
         data = {
             "status": "DELETED",
             "invoice_id": "test-invoice-uuid",
-            "message": "Invoice deleted successfully"
+            "deleted_at": "2025-11-16T10:30:00Z",
+            "message": "Invoice soft-deleted successfully"
         }
         
         # Should validate without errors

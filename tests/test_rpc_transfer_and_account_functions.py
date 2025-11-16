@@ -619,7 +619,8 @@ class TestDeleteAccountWithReassignment:
         rpc_response = MockSupabaseResponse(
             data=[{
                 'transactions_reassigned': 15,
-                'account_deleted': True
+                'account_soft_deleted': True,
+                'deleted_at': '2025-11-15T10:30:00Z'
             }]
         )
         mock_client.rpc.return_value.execute.return_value = rpc_response
@@ -658,7 +659,8 @@ class TestDeleteAccountWithReassignment:
         rpc_response = MockSupabaseResponse(
             data=[{
                 'transactions_reassigned': 0,
-                'account_deleted': True
+                'account_soft_deleted': True,
+                'deleted_at': '2025-11-15T10:30:00Z'
             }]
         )
         mock_client.rpc.return_value.execute.return_value = rpc_response
@@ -698,22 +700,22 @@ class TestDeleteAccountWithReassignment:
     async def test_delete_account_reassignment_account_not_deleted(self, user_id,
                                                                      from_account_id,
                                                                      to_account_id):
-        """Test error handling when account deletion fails."""
+        """Test error handling when account soft-deletion fails."""
         from backend.services.account_service import delete_account_with_reassignment
         
         mock_client = MagicMock()
         
-        # Mock RPC response - account_deleted = False
+        # Mock RPC response - account_soft_deleted = False
         rpc_response = MockSupabaseResponse(
             data=[{
                 'transactions_reassigned': 5,
-                'account_deleted': False  # Deletion failed
+                'account_soft_deleted': False  # Soft-deletion failed
             }]
         )
         mock_client.rpc.return_value.execute.return_value = rpc_response
         
         # Should raise exception
-        with pytest.raises(Exception, match="Account.*was not deleted"):
+        with pytest.raises(Exception, match="Account.*was not soft-deleted"):
             await delete_account_with_reassignment(
                 supabase_client=mock_client,
                 user_id=user_id,
@@ -727,12 +729,12 @@ class TestDeleteAccountWithReassignment:
 # ============================================================================
 
 class TestDeleteAccountWithTransactions:
-    """Test suite for delete_account_cascade RPC function."""
+    """Test suite for delete_account_cascade RPC function (soft-delete strategy)."""
 
     @pytest.mark.asyncio
     async def test_successful_account_deletion_with_cascade(self, user_id, 
                                                             from_account_id):
-        """Test successful account deletion with transaction cascade."""
+        """Test successful account soft-deletion with transaction cascade."""
         from backend.services.account_service import delete_account_with_transactions
         
         mock_client = MagicMock()
@@ -740,21 +742,23 @@ class TestDeleteAccountWithTransactions:
         # Mock RPC response
         rpc_response = MockSupabaseResponse(
             data=[{
-                'transactions_deleted': 20,
-                'paired_references_cleared': 5,
-                'account_deleted': True
+                'recurring_templates_soft_deleted': 3,
+                'transactions_soft_deleted': 20,
+                'account_soft_deleted': True,
+                'deleted_at': '2025-11-15T10:30:00Z'
             }]
         )
         mock_client.rpc.return_value.execute.return_value = rpc_response
         
         # Call service function
-        transaction_count = await delete_account_with_transactions(
+        recurring_count, transaction_count = await delete_account_with_transactions(
             supabase_client=mock_client,
             user_id=user_id,
             account_id=from_account_id
         )
         
         # Assertions
+        assert recurring_count == 3
         assert transaction_count == 20
         
         # Verify RPC was called with correct parameters
@@ -767,36 +771,38 @@ class TestDeleteAccountWithTransactions:
         )
 
     @pytest.mark.asyncio
-    async def test_delete_account_cascade_clears_paired_references(self, user_id,
-                                                                     from_account_id):
-        """Test that cascade properly handles paired transfer references."""
+    async def test_delete_account_cascade_handles_recurring_templates(self, user_id,
+                                                                        from_account_id):
+        """Test that cascade properly soft-deletes recurring templates."""
         from backend.services.account_service import delete_account_with_transactions
         
         mock_client = MagicMock()
         
-        # Mock RPC response - shows paired refs were cleared
+        # Mock RPC response - shows recurring templates were soft-deleted
         rpc_response = MockSupabaseResponse(
             data=[{
-                'transactions_deleted': 20,
-                'paired_references_cleared': 10,  # Half of 20 are paired
-                'account_deleted': True
+                'recurring_templates_soft_deleted': 10,
+                'transactions_soft_deleted': 20,
+                'account_soft_deleted': True,
+                'deleted_at': '2025-11-15T10:30:00Z'
             }]
         )
         mock_client.rpc.return_value.execute.return_value = rpc_response
         
-        transaction_count = await delete_account_with_transactions(
+        recurring_count, transaction_count = await delete_account_with_transactions(
             supabase_client=mock_client,
             user_id=user_id,
             account_id=from_account_id
         )
         
-        # Verify both transactions and paired refs were handled
+        # Verify both recurring templates and transactions were soft-deleted
+        assert recurring_count == 10
         assert transaction_count == 20
 
     @pytest.mark.asyncio
     async def test_delete_account_cascade_with_no_transactions(self, user_id,
                                                                 from_account_id):
-        """Test account deletion when no transactions exist."""
+        """Test account soft-deletion when no transactions exist."""
         from backend.services.account_service import delete_account_with_transactions
         
         mock_client = MagicMock()
@@ -804,19 +810,21 @@ class TestDeleteAccountWithTransactions:
         # Mock RPC response - 0 transactions
         rpc_response = MockSupabaseResponse(
             data=[{
-                'transactions_deleted': 0,
-                'paired_references_cleared': 0,
-                'account_deleted': True
+                'recurring_templates_soft_deleted': 0,
+                'transactions_soft_deleted': 0,
+                'account_soft_deleted': True,
+                'deleted_at': '2025-11-15T10:30:00Z'
             }]
         )
         mock_client.rpc.return_value.execute.return_value = rpc_response
         
-        transaction_count = await delete_account_with_transactions(
+        recurring_count, transaction_count = await delete_account_with_transactions(
             supabase_client=mock_client,
             user_id=user_id,
             account_id=from_account_id
         )
         
+        assert recurring_count == 0
         assert transaction_count == 0
 
     @pytest.mark.asyncio
@@ -841,23 +849,23 @@ class TestDeleteAccountWithTransactions:
     @pytest.mark.asyncio
     async def test_delete_account_cascade_account_not_deleted(self, user_id,
                                                                from_account_id):
-        """Test error handling when account deletion fails."""
+        """Test error handling when account soft-deletion fails."""
         from backend.services.account_service import delete_account_with_transactions
         
         mock_client = MagicMock()
         
-        # Mock RPC response - account_deleted = False
+        # Mock RPC response - account_soft_deleted = False
         rpc_response = MockSupabaseResponse(
             data=[{
-                'transactions_deleted': 15,
-                'paired_references_cleared': 3,
-                'account_deleted': False  # Deletion failed
+                'recurring_templates_soft_deleted': 2,
+                'transactions_soft_deleted': 15,
+                'account_soft_deleted': False  # Soft-deletion failed
             }]
         )
         mock_client.rpc.return_value.execute.return_value = rpc_response
         
         # Should raise exception
-        with pytest.raises(Exception, match="Account.*was not deleted"):
+        with pytest.raises(Exception, match="Account.*was not soft-deleted"):
             await delete_account_with_transactions(
                 supabase_client=mock_client,
                 user_id=user_id,

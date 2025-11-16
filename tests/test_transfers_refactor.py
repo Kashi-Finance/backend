@@ -21,18 +21,24 @@ def client():
 
 
 @pytest.fixture
-def mock_auth_user(monkeypatch):
-    """Mock authenticated user."""
-    def mock_get_authenticated_user():
-        return MagicMock(
+def mock_auth_user():
+    """Mock authenticated user dependency."""
+    from backend.auth.dependencies import AuthenticatedUser
+    
+    async def mock_dependency():
+        return AuthenticatedUser(
             user_id="test-user-id",
             access_token="test-token"
         )
     
-    monkeypatch.setattr(
-        "backend.routes.transfers.get_authenticated_user",
-        lambda: mock_get_authenticated_user()
-    )
+    # Override the dependency in the app
+    from backend.auth.dependencies import get_authenticated_user
+    app.dependency_overrides[get_authenticated_user] = mock_dependency
+    
+    yield
+    
+    # Cleanup
+    app.dependency_overrides.clear()
 
 
 def test_transfer_create_response_has_transactions_array(mock_auth_user, monkeypatch):
