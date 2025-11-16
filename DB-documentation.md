@@ -63,9 +63,10 @@ When transactions are created automatically by the system, they are marked using
 
 | Key | Description | Used By |
 |:----|:------------|:--------|
-| `recurring_rule_auto` | Transaction materialized from a recurring transaction template | Recurring transaction sync process |
+| `recurring_sync` | Transaction materialized from a recurring transaction template | Recurring transaction sync process |
 | `invoice_ocr` | Transaction created from invoice OCR extraction | Invoice commit endpoint |
-| `bulk_import` | Transaction imported via bulk data import | Bulk import tools |
+| `initial_balance` | Transaction created as initial balance when account is created | Account creation endpoint |
+| `bulk_import` | Transaction imported via bulk data import | Bulk import tools (not yet implemented) |
 
 **Important Notes:**
 
