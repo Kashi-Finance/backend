@@ -71,6 +71,11 @@ class Settings:
         return cls.ENVIRONMENT.lower() == "production"
     
     @classmethod
+    def is_staging(cls) -> bool:
+        """Check if running in staging environment."""
+        return cls.ENVIRONMENT.lower() == "staging"
+    
+    @classmethod
     def is_development(cls) -> bool:
         """Check if running in development environment."""
         return cls.ENVIRONMENT.lower() == "development"
@@ -91,5 +96,5 @@ if os.getenv("VALIDATE_CONFIG", "true").lower() == "true":
             print(f"⚠️  Warning: {e}")
             print("   The app may not work correctly until you configure your .env file.")
         else:
-            # In production, fail immediately
+            # In production or staging, fail immediately
             raise
