@@ -570,6 +570,90 @@ result = supabase_client.rpc(
 
 ## Soft-Delete RPCs
 
+### `delete_invoice`
+
+**Purpose:** Soft-delete an invoice (set `deleted_at` timestamp).
+
+**Signature:**
+```sql
+CREATE OR REPLACE FUNCTION delete_invoice(
+  p_invoice_id uuid,
+  p_user_id uuid
+)
+RETURNS TABLE(
+  invoice_soft_deleted BOOLEAN,
+  deleted_at TIMESTAMPTZ
+)
+```
+
+**Security:** `SECURITY DEFINER` (validates ownership via `user_id`)
+
+**Behavior:**
+1. Validates `p_invoice_id` belongs to `p_user_id`
+2. Sets `deleted_at = now()` on the invoice
+3. Returns soft-delete status and timestamp
+
+**Usage:**
+```python
+# Python (via Supabase client)
+result = supabase_client.rpc(
+    'delete_invoice',
+    {
+        'p_invoice_id': invoice_uuid,
+        'p_user_id': user_uuid
+    }
+).execute()
+```
+
+**Notes:**
+- Invoice becomes invisible to user queries (RLS filters `deleted_at IS NULL`)
+- Storage cleanup (invoice image/PDF) should be handled by backend service layer after successful soft-delete
+- Related transactions remain intact (invoice_id FK is SET NULL on soft-delete)
+
+---
+
+### `delete_budget`
+
+**Purpose:** Soft-delete a budget (set `deleted_at` timestamp).
+
+**Signature:**
+```sql
+CREATE OR REPLACE FUNCTION delete_budget(
+  p_budget_id uuid,
+  p_user_id uuid
+)
+RETURNS TABLE(
+  budget_soft_deleted BOOLEAN,
+  deleted_at TIMESTAMPTZ
+)
+```
+
+**Security:** `SECURITY DEFINER` (validates ownership via `user_id`)
+
+**Behavior:**
+1. Validates `p_budget_id` belongs to `p_user_id`
+2. Sets `deleted_at = now()` on the budget
+3. Returns soft-delete status and timestamp
+
+**Usage:**
+```python
+# Python (via Supabase client)
+result = supabase_client.rpc(
+    'delete_budget',
+    {
+        'p_budget_id': budget_uuid,
+        'p_user_id': user_uuid
+    }
+).execute()
+```
+
+**Notes:**
+- Budget becomes invisible to user queries (RLS filters `deleted_at IS NULL`)
+- `budget_category` junction rows remain for historical analysis
+- Transactions remain unaffected (budget deletion doesn't affect historical spending data)
+
+---
+
 ### `delete_account_soft_delete` (DEPRECATED)
 
 **Status:** DEPRECATED as of Nov 15, 2025
@@ -587,62 +671,109 @@ Both new RPCs perform soft-delete (set `deleted_at`) instead of physical deletio
 
 ## Cache Recomputation RPCs
 
-### `recompute_account_balance` (TODO)
+### `recompute_account_balance`
 
 **Purpose:** Recalculate `account.cached_balance` from transaction history.
 
-**Planned Signature:**
+**Signature:**
 ```sql
 CREATE OR REPLACE FUNCTION recompute_account_balance(
-  p_account_id uuid
+  p_account_id uuid,
+  p_user_id uuid
 )
 RETURNS numeric(12,2)
 ```
 
-**Planned Behavior:**
-1. Sum all non-deleted transactions for `p_account_id`
-   - `income` transactions: positive contribution
-   - `outcome` transactions: negative contribution
-2. Update `account.cached_balance` with result
-3. Return new balance
+**Security:** `SECURITY DEFINER` (validates ownership via `user_id`)
 
-**Status:** Not yet implemented
+**Behavior:**
+1. Validates `p_account_id` belongs to `p_user_id`
+2. Sums all non-deleted transactions for the account:
+   - `income` transactions: positive contribution (+amount)
+   - `outcome` transactions: negative contribution (-amount)
+3. Updates `account.cached_balance` with the computed sum
+4. Returns the new balance
 
-**Use Cases:**
-- After bulk transaction reassignment
+**Usage:**
+```python
+# Python (via Supabase client)
+result = supabase_client.rpc(
+    'recompute_account_balance',
+    {
+        'p_account_id': account_uuid,
+        'p_user_id': user_uuid
+    }
+).execute()
+
+new_balance = result.data  # Returns numeric value
+```
+
+**When to Call:**
+- After bulk transaction reassignment (`delete_account_reassign`)
 - After soft-deleting transactions
 - After restoring soft-deleted transactions
-- Periodic cache verification
+- Periodic cache verification (recommended: daily background job)
+
+**Notes:**
+- Only counts transactions where `deleted_at IS NULL`
+- Updates `account.updated_at` timestamp
+- Atomic operation (transaction-safe)
 
 ---
 
-### `recompute_budget_consumption` (TODO)
+### `recompute_budget_consumption`
 
 **Purpose:** Recalculate `budget.cached_consumption` for a given budget period.
 
-**Planned Signature:**
+**Signature:**
 ```sql
 CREATE OR REPLACE FUNCTION recompute_budget_consumption(
   p_budget_id uuid,
+  p_user_id uuid,
   p_period_start date,
   p_period_end date
 )
 RETURNS numeric(12,2)
 ```
 
-**Planned Behavior:**
-1. Fetch budget and linked categories via `budget_category` junction
-2. Sum all non-deleted `outcome` transactions in linked categories
-   - Filter by date range: `[p_period_start, p_period_end]`
-3. Update `budget.cached_consumption` with result
-4. Return new consumption amount
+**Security:** `SECURITY DEFINER` (validates ownership via `user_id`)
 
-**Status:** Not yet implemented
+**Behavior:**
+1. Validates `p_budget_id` belongs to `p_user_id`
+2. Validates date range (`p_period_start` <= `p_period_end`)
+3. Fetches all categories linked to budget via `budget_category` junction
+4. Sums all non-deleted **OUTCOME** transactions in those categories within date range
+5. Updates `budget.cached_consumption` with the computed sum
+6. Returns the new consumption amount
 
-**Use Cases:**
-- After soft-deleting transactions affecting budget categories
-- When budget period rolls over
-- Periodic cache verification
+**Usage:**
+```python
+# Python (via Supabase client)
+result = supabase_client.rpc(
+    'recompute_budget_consumption',
+    {
+        'p_budget_id': budget_uuid,
+        'p_user_id': user_uuid,
+        'p_period_start': '2025-11-01',
+        'p_period_end': '2025-11-30'
+    }
+).execute()
+
+new_consumption = result.data  # Returns numeric value
+```
+
+**When to Call:**
+- After soft-deleting transactions that affect budget categories
+- When budget period rolls over (start of new month/week/year)
+- After changing budget category associations via `budget_category` updates
+- Periodic cache verification (recommended: daily background job)
+
+**Notes:**
+- Only counts transactions where `flow_type = 'outcome'` (expenses only)
+- Only counts transactions where `deleted_at IS NULL`
+- Date range is inclusive: `[p_period_start, p_period_end]`
+- Updates `budget.updated_at` timestamp
+- Atomic operation (transaction-safe)
 
 ---
 
@@ -744,7 +875,6 @@ All RPCs are defined in versioned SQL migration files under `supabase/migrations
 |:-------------|:---------------|:-------------|
 | `delete_account_reassign` | `20251115000001_delete_account_reassign.sql` | Nov 15, 2025 |
 | `delete_account_cascade` | `20251115000002_delete_account_cascade.sql` | Nov 15, 2025 |
-| `delete_account_soft_delete` | `20251115000003_delete_account_soft_delete_rpc.sql` | Nov 15, 2025 (DEPRECATED) |
 | `delete_transaction` | `20251115000004_delete_transaction_rpc.sql` | Nov 15, 2025 |
 | `delete_recurring_transaction` | `20251115000005_delete_recurring_transaction_rpc.sql` | Nov 15, 2025 |
 | `sync_recurring_transactions` | `20251106000001_sync_recurring_transactions_function.sql` | Nov 6, 2025 |
@@ -754,30 +884,28 @@ All RPCs are defined in versioned SQL migration files under `supabase/migrations
 | `create_recurring_transfer` | `20251107000005_create_recurring_transfer_rpc.sql` | Nov 7, 2025 |
 | `delete_transfer` | `20251107000008_delete_transfer_rpc.sql` | Nov 7, 2025 |
 | `create_wishlist_with_items` | `20251107000009_create_wishlist_with_items_rpc.sql` | Nov 7, 2025 |
+| `delete_invoice` | `20251116000001_delete_invoice_rpc.sql` | Nov 16, 2025 |
+| `delete_budget` | `20251116000002_delete_budget_rpc.sql` | Nov 16, 2025 |
+| `recompute_account_balance` | `20251116000003_recompute_account_balance_rpc.sql` | Nov 16, 2025 |
+| `recompute_budget_consumption` | `20251116000004_recompute_budget_consumption_rpc.sql` | Nov 16, 2025 |
 
 ---
 
 ## Summary
 
-**Total Active RPCs: 12**
+**Total Active RPCs: 16**
 - Account management: 2
 - Transaction management: 1
 - Category management: 1
 - Transfer management: 2
 - Recurring transactions: 4
 - Wishlist: 1
-- Soft-delete (standalone): 1 (DEPRECATED)
-
-**Deprecated RPCs: 1**
-- `soft_delete_account` (use `delete_account_reassign` or `delete_account_cascade` instead)
-
-**Planned RPCs: 2**
-- `recompute_account_balance` (cache management)
-- `recompute_budget_consumption` (cache management)
+- Soft-delete: 3 (2 active + 1 DEPRECATED)
+- Cache recomputation: 2
 
 ---
 
-**Last Updated:** November 15, 2025  
+**Last Updated:** November 16, 2025  
 **Maintainer:** Backend Team  
 **Related Docs:** 
 - `DB-DDL.txt` (schema definitions)
