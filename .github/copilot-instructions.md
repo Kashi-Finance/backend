@@ -230,6 +230,8 @@ When generating or updating code:
 * CI expects `pytest` to run cleanly on Docker-based local execution.
 * Keep all tests deterministic and network-free.
 
+* Creating documents after finishing a task is not necessary and should only be done if requested.
+
 
 Do not produce UI code here.
 Do not produce deployment scripts here.

@@ -7,7 +7,7 @@ This file is the ONLY place where database behavior, table structures, queries, 
 
 Application code MUST treat this file as the source of truth. Do not invent schemas or SQL in other files.
 
-Always refer to DATABASE-DDL.md for exact table definitions and RLS policies.
+Always refer to DB-DDL.txt for exact table definitions and RLS policies.
 
 ## 1. Ownership
 
