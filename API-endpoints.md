@@ -222,7 +222,7 @@ Use in frontend:
 **Request:** No body. Authorization required (Bearer token).
 
 **Behavior:**
-- **IMPORTANT:** Profile is NOT physically deleted (follows DB documentation delete rule)
+- **IMPORTANT:** Profile is NOT physically deleted (follows DB-documentation delete rule)
 - Instead, personal fields are cleared/anonymized:
   - `first_name` → set to "Deleted User"
   - `last_name` → set to null
@@ -1748,7 +1748,7 @@ These map to the `budget` table and its join table to categories (`budget_catego
 * `budget_id` - UUID of the budget to delete
 
 **Behavior:**
-- Follows exact DB deletion rule from `DB documentation.md`:
+- Follows exact DB deletion rule from `DB-documentation.md`:
   1. Delete all `budget_category` links tied to the budget
   2. Delete the budget
   3. Never delete transactions (they remain as financial history)
