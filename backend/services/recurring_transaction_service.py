@@ -238,7 +238,7 @@ async def delete_recurring_transaction(
     """
     Delete a recurring transaction rule following DB deletion rules.
     
-    DB Rules (from DB documentation.md):
+    DB Rules:
     1. The record can be deleted safely without touching past generated transactions
     2. If it has a paired rule (paired_recurring_transaction_id), that reference
        must be deleted together

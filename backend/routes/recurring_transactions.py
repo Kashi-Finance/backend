@@ -498,7 +498,7 @@ async def update_existing_recurring_transaction(
     - Requires valid Authorization Bearer token
     - Only the rule owner can delete their rule
     
-    DB Rules (from DB documentation.md):
+    DB Rules:
     1. Record can be deleted without touching past transactions
     2. If paired rule exists, it must be deleted together
     3. Future auto-generation stops but existing records preserved
