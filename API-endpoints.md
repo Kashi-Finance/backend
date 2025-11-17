@@ -380,8 +380,8 @@ Money lives in accounts. Spending is labeled with categories.
 
 **Behavior:**
 - Returns all accounts owned by the authenticated user
-- Each account includes computed balance (derived from transactions)
-- Balance is never stored in DB; always calculated on read
+- Each account includes `cached_balance` for performance optimization
+- Cached balance can be recomputed via `recompute_account_balance` RPC if needed
 - Results are ordered by creation date (newest first)
 - RLS automatically filters to user's accounts only
 
@@ -395,6 +395,7 @@ Money lives in accounts. Spending is labeled with categories.
       "name": "Main Checking",
       "type": "bank",
       "currency": "GTQ",
+      "cached_balance": 2500.50,
       "created_at": "2025-10-31T10:00:00Z",
       "updated_at": "2025-10-31T10:00:00Z"
     }
@@ -448,7 +449,8 @@ Money lives in accounts. Spending is labeled with categories.
 **Behavior:**
 - Creates a new account owned by the authenticated user
 - `user_id` is set from auth token (client cannot override)
-- Account starts with zero balance (balance derived from transactions)
+- Account starts with `cached_balance` of 0 (or initial balance if provided)
+- Cached balance can be recomputed via `recompute_account_balance` RPC if needed
 - All fields are validated by Pydantic before persistence
 
 **Response:**
@@ -461,6 +463,7 @@ Money lives in accounts. Spending is labeled with categories.
     "name": "Main Checking",
     "type": "bank",
     "currency": "GTQ",
+    "cached_balance": 0.0,
     "created_at": "2025-11-05T10:00:00Z",
     "updated_at": "2025-11-05T10:00:00Z"
   },
@@ -493,7 +496,8 @@ Money lives in accounts. Spending is labeled with categories.
 **Behavior:**
 - Returns the account if it exists and belongs to the authenticated user
 - Returns 404 if account doesn't exist or doesn't belong to user (RLS enforcement)
-- Account balance is computed from transactions (not stored)
+- Includes `cached_balance` for performance optimization
+- Cached balance can be recomputed via `recompute_account_balance` RPC if needed
 
 **Response:**
 ```json
@@ -503,6 +507,7 @@ Money lives in accounts. Spending is labeled with categories.
   "name": "Main Checking",
   "type": "bank",
   "currency": "GTQ",
+  "cached_balance": 2500.50,
   "created_at": "2025-10-31T10:00:00Z",
   "updated_at": "2025-10-31T10:00:00Z"
 }
@@ -558,6 +563,7 @@ Money lives in accounts. Spending is labeled with categories.
     "name": "Updated Account Name",
     "type": "cash",
     "currency": "USD",
+    "cached_balance": 2500.50,
     "created_at": "2025-10-31T10:00:00Z",
     "updated_at": "2025-11-05T14:30:00Z"
   },
@@ -1580,6 +1586,7 @@ These map to the `budget` table and its join table to categories (`budget_catego
 
 **Behavior:**
 - Returns all user's budgets with their linked categories
+- Includes `cached_consumption` for performance optimization (recomputable via `recompute_budget_consumption` RPC)
 - Supports filtering by frequency and active status
 - Uses JOIN on `budget_category` → `category` to fetch category details
 - Ordered by `created_at` descending (newest first)
@@ -1599,6 +1606,7 @@ These map to the `budget` table and its join table to categories (`budget_catego
       "start_date": "2025-11-01",
       "end_date": null,
       "is_active": true,
+      "cached_consumption": 320.75,
       "categories": [
         {
           "id": "category-uuid-1",
@@ -1690,6 +1698,7 @@ These map to the `budget` table and its join table to categories (`budget_catego
     "start_date": "2025-11-01",
     "end_date": null,
     "is_active": true,
+    "cached_consumption": 0.0,
     "categories": [
       {
         "id": "category-uuid-1",
@@ -1741,6 +1750,7 @@ These map to the `budget` table and its join table to categories (`budget_catego
 
 **Behavior:**
 - Returns budget details for the specified ID with linked categories
+- Includes `cached_consumption` for performance optimization (recomputable via `recompute_budget_consumption` RPC)
 - Uses JOIN on `budget_category` → `category` to fetch category details
 - Only accessible to the budget owner (RLS enforced)
 - Returns 404 if budget doesn't exist or belongs to another user
@@ -1756,6 +1766,7 @@ These map to the `budget` table and its join table to categories (`budget_catego
   "start_date": "2025-11-01",
   "end_date": null,
   "is_active": true,
+  "cached_consumption": 320.75,
   "categories": [
     {
       "id": "category-uuid-1",
@@ -1834,6 +1845,7 @@ These map to the `budget` table and its join table to categories (`budget_catego
     "start_date": "2025-11-01",
     "end_date": null,
     "is_active": false,
+    "cached_consumption": 320.75,
     "categories": [
       {
         "id": "category-uuid-1",
@@ -3520,3 +3532,4 @@ Budgets & suscriptions:
 
 Activity / financial history:
 * `/transactions` powers the activity feed and balance per account. Treat transactions with `paired_transaction_id` as transfers, not spending.
+* Account and budget endpoints now include `cached_balance` and `cached_consumption` for optimal performance.
