@@ -12,8 +12,8 @@ Endpoints:
 """
 
 import logging
-from typing import Annotated, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Path
+from typing import Annotated, Any, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Path
 
 from backend.auth.dependencies import get_authenticated_user, AuthenticatedUser
 from backend.db.client import get_supabase_client
@@ -49,6 +49,7 @@ router = APIRouter(prefix="/budgets", tags=["budgets"])
     
     This endpoint:
     - Returns all user's budgets
+    - Supports filtering by frequency and active status
     - Ordered by creation date (newest first)
     - Only accessible to the budget owner (RLS enforced)
     
@@ -58,7 +59,9 @@ router = APIRouter(prefix="/budgets", tags=["budgets"])
     """
 )
 async def list_budgets(
-    auth_user: Annotated[AuthenticatedUser, Depends(get_authenticated_user)]
+    auth_user: Annotated[AuthenticatedUser, Depends(get_authenticated_user)],
+    frequency: Optional[str] = Query(None, description="Filter by frequency (daily|weekly|monthly|yearly|once)"),
+    is_active: Optional[bool] = Query(None, description="Filter by active status"),
 ) -> BudgetListResponse:
     """
     List all budgets for the authenticated user.
@@ -70,12 +73,13 @@ async def list_budgets(
     
     Step 2: Parse/Validate Request
     - No request body (GET endpoint)
+    - Query parameters: frequency, is_active
     
     Step 3: Domain & Intent Filter
-    - Simple list request, no filtering needed
+    - Simple list request with optional filters
     
     Step 4: Call Service
-    - Call get_all_budgets() service function
+    - Call get_all_budgets() service function with filters
     
     Step 5: Map Output -> ResponseModel
     - Convert budgets list to BudgetListResponse
@@ -83,14 +87,19 @@ async def list_budgets(
     Step 6: Persistence
     - Read-only operation (no persistence needed)
     """
-    logger.info(f"Listing budgets for user {auth_user.user_id}")
+    logger.info(
+        f"Listing budgets for user {auth_user.user_id} "
+        f"(filters: frequency={frequency}, is_active={is_active})"
+    )
     
     supabase_client = get_supabase_client(auth_user.access_token)
     
     try:
         budgets = await get_all_budgets(
             supabase_client=supabase_client,
-            user_id=auth_user.user_id
+            user_id=auth_user.user_id,
+            frequency=frequency,
+            is_active=is_active,
         )
         
         # Helper to coerce DB values to strings
@@ -116,6 +125,7 @@ async def list_budgets(
             BudgetResponse(
                 id=_as_str(b.get("id")),
                 user_id=_as_str(b.get("user_id")),
+                name=_as_str(b.get("name")) if b.get("name") else "Presupuesto",  # Optional field
                 limit_amount=_as_float(b.get("limit_amount")),
                 frequency=b.get("frequency", "monthly"),  # type: ignore
                 interval=_as_int(b.get("interval")),
@@ -201,6 +211,7 @@ async def create_new_budget(
         created_budget, categories_linked = await create_budget(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
+            name=request.name or "Presupuesto",
             limit_amount=request.limit_amount,
             frequency=request.frequency,
             interval=request.interval,
@@ -232,6 +243,7 @@ async def create_new_budget(
         budget_response = BudgetResponse(
             id=_as_str(created_budget.get("id")),
             user_id=_as_str(created_budget.get("user_id")),
+            name=created_budget.get("name") or "Presupuesto",
             limit_amount=_as_float(created_budget.get("limit_amount")),
             frequency=created_budget.get("frequency", "monthly"),  # type: ignore
             interval=_as_int(created_budget.get("interval")),
@@ -327,6 +339,7 @@ async def get_budget(
         return BudgetResponse(
             id=_as_str(budget.get("id")),
             user_id=_as_str(budget.get("user_id")),
+            name=budget.get("name"),  # Optional field
             limit_amount=_as_float(budget.get("limit_amount")),
             frequency=budget.get("frequency", "monthly"),  # type: ignore
             interval=_as_int(budget.get("interval")),
@@ -430,6 +443,7 @@ async def update_existing_budget(
         budget_response = BudgetResponse(
             id=_as_str(updated_budget.get("id")),
             user_id=_as_str(updated_budget.get("user_id")),
+            name=updated_budget.get("name"),  # Optional field
             limit_amount=_as_float(updated_budget.get("limit_amount")),
             frequency=updated_budget.get("frequency", "monthly"),  # type: ignore
             interval=_as_int(updated_budget.get("interval")),
@@ -479,7 +493,7 @@ async def update_existing_budget(
     - Requires valid Authorization Bearer token
     - Only the budget owner can delete their budget
     
-    DB Rules (from DB documentation.md):
+    DB Rules (from DB-documentation.md):
     1. Delete all budget_category links
     2. Delete the budget
     3. Transactions remain untouched
@@ -495,7 +509,7 @@ async def delete_existing_budget(
     supabase_client = get_supabase_client(auth_user.access_token)
     
     try:
-        success, categories_unlinked = await delete_budget(
+        success, deleted_at = await delete_budget(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
             budget_id=budget_id
@@ -511,16 +525,13 @@ async def delete_existing_budget(
                 }
             )
         
-        logger.info(
-            f"Budget {budget_id} deleted successfully. "
-            f"{categories_unlinked} category link(s) removed"
-        )
+        logger.info(f"Budget {budget_id} soft-deleted successfully at {deleted_at}")
         
         return BudgetDeleteResponse(
             status="DELETED",
             budget_id=str(budget_id),
-            categories_unlinked=categories_unlinked,
-            message=f"Budget deleted successfully. {categories_unlinked} category link(s) removed."
+            deleted_at=str(deleted_at),
+            message="Budget soft-deleted successfully"
         )
         
     except HTTPException:

@@ -34,6 +34,7 @@ class BudgetResponse(BaseModel):
     """
     id: str = Field(..., description="Budget UUID")
     user_id: str = Field(..., description="Owner user UUID")
+    name: Optional[str] = Field(None, description="Optional user-friendly name (e.g., 'Monthly Groceries')")
     limit_amount: float = Field(..., description="Maximum allowed spend for this budget period")
     frequency: BudgetFrequency = Field(..., description="Budget repetition cadence")
     interval: int = Field(..., description="How often the budget repeats in units of frequency")
@@ -62,9 +63,14 @@ class BudgetCreateRequest(BaseModel):
     """
     Request to create a new budget.
     
-    All fields are required except end_date and is_active (which has a default).
+    All fields are required except name, end_date and is_active (which have defaults).
     Categories are linked separately via budget_category after creation.
     """
+    name: Optional[str] = Field(
+        None,
+        description="Optional user-friendly name for the budget (e.g., 'Monthly Groceries', 'Q4 Travel Fund')",
+        examples=["Monthly Groceries", "Vacation Fund", None]
+    )
     limit_amount: float = Field(
         ...,
         description="Maximum allowed spend for this budget period",
@@ -174,15 +180,15 @@ class BudgetUpdateResponse(BaseModel):
 
 class BudgetDeleteResponse(BaseModel):
     """
-    Response after successfully deleting a budget.
+    Response after successfully soft-deleting a budget.
     
-    Includes count of budget_category links removed.
+    Note: Soft-delete sets deleted_at timestamp. Junction table rows remain for historical analysis.
     """
-    status: Literal["DELETED"] = Field("DELETED", description="Indicates successful deletion")
-    budget_id: str = Field(..., description="UUID of deleted budget")
-    categories_unlinked: int = Field(..., description="Number of budget_category links removed")
+    status: Literal["DELETED"] = Field("DELETED", description="Indicates successful soft-deletion")
+    budget_id: str = Field(..., description="UUID of soft-deleted budget")
+    deleted_at: str = Field(..., description="ISO-8601 timestamp when budget was soft-deleted")
     message: str = Field(
         ...,
-        description="Success message with deletion details",
-        examples=["Budget deleted successfully. 3 category link(s) removed."]
+        description="Success message",
+        examples=["Budget soft-deleted successfully"]
     )

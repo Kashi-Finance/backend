@@ -1,7 +1,7 @@
 """
 Budget persistence service.
 
-CRITICAL RULES (from DB documentation.md):
+CRITICAL RULES:
 1. Budgets track spending limits over time for one or more categories
 2. Categories are linked via budget_category junction table
 3. When deleting a budget:
@@ -21,7 +21,9 @@ logger = logging.getLogger(__name__)
 
 async def get_all_budgets(
     supabase_client: Client,
-    user_id: str
+    user_id: str,
+    frequency: Optional[str] = None,
+    is_active: Optional[bool] = None,
 ) -> List[Dict[str, Any]]:
     """
     Fetch all budgets for the user with their linked categories.
@@ -31,6 +33,8 @@ async def get_all_budgets(
     Args:
         supabase_client: Authenticated Supabase client
         user_id: The authenticated user's ID
+        frequency: Optional filter by budget frequency (daily/weekly/monthly/yearly/once)
+        is_active: Optional filter by active status
     
     Returns:
         List of budget records with embedded categories
@@ -39,11 +43,14 @@ async def get_all_budgets(
         - RLS enforces user_id = auth.uid()
         - User can only access their own budgets
     """
-    logger.debug(f"Fetching budgets with categories for user {user_id}")
+    logger.debug(
+        f"Fetching budgets with categories for user {user_id} "
+        f"(filters: frequency={frequency}, is_active={is_active})"
+    )
     
     # Use Supabase foreign key syntax to join budget_category and category
     # Select full category records so the API can return every category field
-    result = (
+    query = (
         supabase_client.table("budget")
         .select("""
             *,
@@ -52,9 +59,15 @@ async def get_all_budgets(
             )
         """)
         .eq("user_id", user_id)
-        .order("created_at", desc=True)
-        .execute()
     )
+    
+    # Apply filters
+    if frequency:
+        query = query.eq("frequency", frequency)
+    if is_active is not None:
+        query = query.eq("is_active", is_active)
+    
+    result = query.order("created_at", desc=True).execute()
     
     budgets_raw = cast(List[Dict[str, Any]], result.data or [])
     
@@ -155,6 +168,7 @@ async def get_budget_by_id(
 async def create_budget(
     supabase_client: Client,
     user_id: str,
+    name: Optional[str],
     limit_amount: float,
     frequency: str,
     interval: int,
@@ -169,6 +183,7 @@ async def create_budget(
     Args:
         supabase_client: Authenticated Supabase client
         user_id: The authenticated user's ID
+        name: Optional user-friendly name for the budget
         limit_amount: Maximum spend for budget period
         frequency: Budget repetition cadence
         interval: How often budget repeats
@@ -189,6 +204,7 @@ async def create_budget(
     """
     budget_data = {
         "user_id": user_id,
+        "name": name,
         "limit_amount": limit_amount,
         "frequency": frequency,
         "interval": interval,
@@ -301,69 +317,58 @@ async def delete_budget(
     supabase_client: Client,
     user_id: str,
     budget_id: str
-) -> tuple[bool, int]:
+) -> tuple[bool, str | None]:
     """
-    Delete a user budget following DB deletion rules.
+    Soft-delete a user budget using the delete_budget RPC.
     
-    DB Delete Rule (from DB documentation.md):
-    1. Delete all budget_category links tied to this budget
-    2. Delete the budget
-    3. Never delete transactions (they remain as financial history)
+    This function:
+    1. Calls the delete_budget RPC for atomic soft-delete operation
+    2. RPC validates ownership and sets deleted_at timestamp
+    3. budget_category junction rows remain (for historical analysis)
     
     Args:
         supabase_client: Authenticated Supabase client
         user_id: The authenticated user's ID
-        budget_id: UUID of the budget to delete
+        budget_id: UUID of the budget to soft-delete
     
     Returns:
-        Tuple of (success, number of budget_category links removed)
+        Tuple of (success, deleted_at timestamp or None)
     
     Raises:
-        Exception: If DB operation fails
+        Exception: If RPC call fails
     
     Security:
+        - RPC validates user_id ownership before soft-deleting
         - User can only delete their own budgets
-        - RLS enforces user_id = auth.uid()
     """
-    # First verify the budget exists and is owned by user
-    existing = await get_budget_by_id(supabase_client, user_id, budget_id)
-    if not existing:
-        logger.warning(f"Cannot delete budget {budget_id}: not found or not accessible by user {user_id}")
-        return (False, 0)
+    logger.info(f"Preparing to soft-delete budget {budget_id} for user {user_id}")
     
-    logger.info(f"Preparing to delete budget {budget_id} for user {user_id}")
-    
-    # Step 1: Delete all budget_category links
     try:
-        delete_links_result = (
-            supabase_client.table("budget_category")
-            .delete()
-            .eq("budget_id", budget_id)
-            .eq("user_id", user_id)
-            .execute()
-        )
+        # Call the delete_budget RPC for atomic soft-delete
+        rpc_res = supabase_client.rpc(
+            "delete_budget",
+            {
+                "p_budget_id": budget_id,
+                "p_user_id": user_id,
+            },
+        ).execute()
+
+        data = getattr(rpc_res, "data", None)
+        if not isinstance(data, list) or len(data) == 0:
+            logger.warning(f"RPC delete_budget returned no rows for budget {budget_id}")
+            return (False, None)
+
+        row = cast(Dict[str, Any], data[0])
+        budget_soft_deleted = bool(row.get("budget_soft_deleted", False))
+        deleted_at = row.get("deleted_at")
         
-        delete_links_data = cast(List[Dict[str, Any]], delete_links_result.data) if delete_links_result.data else []
-        categories_unlinked = len(delete_links_data)
-        logger.info(f"Removed {categories_unlinked} budget_category link(s)")
+        if budget_soft_deleted:
+            logger.info(f"Budget {budget_id} soft-deleted successfully via RPC at {deleted_at}")
+            return (True, deleted_at)
+        else:
+            logger.warning(f"Budget {budget_id} soft-delete failed via RPC")
+            return (False, None)
+            
     except Exception as e:
-        logger.error(f"Failed to remove budget_category links for budget {budget_id}: {e}", exc_info=True)
+        logger.error(f"Failed to soft-delete budget via RPC for {budget_id}: {e}", exc_info=True)
         raise
-    
-    # Step 2: Delete the budget
-    result = (
-        supabase_client.table("budget")
-        .delete()
-        .eq("id", budget_id)
-        .eq("user_id", user_id)
-        .execute()
-    )
-    
-    result_data = cast(List[Dict[str, Any]], result.data) if result.data else []
-    if not result_data or len(result_data) == 0:
-        logger.warning(f"Deletion of budget {budget_id} returned no rows")
-        return (False, categories_unlinked)
-    
-    logger.info(f"Budget {budget_id} deleted successfully for user {user_id}")
-    
-    return (True, categories_unlinked)
