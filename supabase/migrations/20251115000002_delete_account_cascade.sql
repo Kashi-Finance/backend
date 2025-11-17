@@ -100,8 +100,8 @@ BEGIN
         RAISE EXCEPTION 'Failed to soft-delete account';
     END IF;
     
-    -- TODO: Call recompute_account_balance for this account to zero cached_balance
-    -- (Once recompute RPC is implemented)
+    -- Recompute cached_balance for this account (should be zeroed since all transactions are soft-deleted)
+    PERFORM recompute_account_balance(p_account_id, p_user_id);
     
     -- Return results
     recurring_transactions_soft_deleted := v_recurring_count;

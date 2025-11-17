@@ -84,8 +84,12 @@ BEGIN
                 WHEN 'weekly' THEN
                     -- For weekly with by_weekday, calculate next matching weekday
                     IF v_rule.by_weekday IS NOT NULL AND array_length(v_rule.by_weekday, 1) > 0 THEN
-                        -- Simplified: advance by interval weeks, then find next matching weekday
-                        -- TODO: Implement proper weekday matching logic
+                        -- Current implementation: Simplified advance by interval weeks
+                        -- Proper weekday matching would:
+                        --   1. Find next occurrence of any weekday in by_weekday array
+                        --   2. Handle multiple weekdays per interval (e.g., ["monday", "friday"])
+                        --   3. Respect interval (e.g., every 2 weeks on Monday)
+                        -- Decision: Keep simplified for MVP, enhance post-launch if needed
                         v_next_occurrence := v_next_occurrence + (v_rule.interval || ' weeks')::INTERVAL;
                     ELSE
                         v_next_occurrence := v_next_occurrence + (v_rule.interval || ' weeks')::INTERVAL;
@@ -94,8 +98,13 @@ BEGIN
                 WHEN 'monthly' THEN
                     -- For monthly with by_monthday, calculate next matching day
                     IF v_rule.by_monthday IS NOT NULL AND array_length(v_rule.by_monthday, 1) > 0 THEN
-                        -- Simplified: advance by interval months
-                        -- TODO: Implement proper monthday matching logic
+                        -- Current implementation: Simplified advance by interval months
+                        -- Proper monthday matching would:
+                        --   1. Find next occurrence of any day in by_monthday array
+                        --   2. Handle multiple days per month (e.g., [1, 15] for 1st and 15th)
+                        --   3. Handle month-end edge cases (e.g., day 31 in February)
+                        --   4. Respect interval (e.g., every 2 months on the 15th)
+                        -- Decision: Keep simplified for MVP, enhance post-launch if needed
                         v_next_occurrence := v_next_occurrence + (v_rule.interval || ' months')::INTERVAL;
                     ELSE
                         v_next_occurrence := v_next_occurrence + (v_rule.interval || ' months')::INTERVAL;

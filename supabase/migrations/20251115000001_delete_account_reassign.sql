@@ -75,8 +75,8 @@ BEGIN
         RAISE EXCEPTION 'Failed to soft-delete account';
     END IF;
     
-    -- TODO: Call recompute_account_balance for target account to update cached_balance
-    -- (Once recompute RPC is implemented)
+    -- Recompute cached_balance for target account (reflects reassigned transactions)
+    PERFORM recompute_account_balance(p_target_account_id, p_user_id);
     
     -- Return results
     recurring_transactions_reassigned := v_recurring_count;

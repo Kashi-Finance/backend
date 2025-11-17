@@ -18,6 +18,7 @@ DECLARE
     v_deleted_at TIMESTAMPTZ;
     v_paired_id UUID;
     v_paired_affected BOOLEAN := FALSE;
+    v_account_id UUID;
 BEGIN
     -- Validate transaction exists and belongs to user
     IF NOT EXISTS (
@@ -27,8 +28,8 @@ BEGIN
         RAISE EXCEPTION 'Transaction not found, already deleted, or not accessible';
     END IF;
     
-    -- Check if this transaction is part of a paired transfer
-    SELECT paired_transaction_id INTO v_paired_id
+    -- Store account_id and paired_transaction_id for later use
+    SELECT account_id, paired_transaction_id INTO v_account_id, v_paired_id
     FROM "transaction"
     WHERE id = p_transaction_id;
     
@@ -53,8 +54,13 @@ BEGIN
         v_paired_affected := TRUE;
     END IF;
     
-    -- TODO: Update account.cached_balance via trigger or separate call
-    -- TODO: Update budget.cached_consumption if transaction affects active budget
+    -- Recompute cached_balance for the affected account
+    PERFORM recompute_account_balance(v_account_id, p_user_id);
+    
+    -- Note: Budget consumption recomputation is handled separately by budget queries
+    -- Budgets use live queries with deleted_at IS NULL filter, so no explicit cache update needed
+    -- The cached_consumption field in budget table is updated via recompute_budget_consumption RPC
+    -- which can be called on-demand or via scheduled background job
     
     -- Return results
     transaction_soft_deleted := TRUE;
