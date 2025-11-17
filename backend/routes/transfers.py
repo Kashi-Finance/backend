@@ -15,6 +15,8 @@ from backend.db.client import get_supabase_client
 from backend.schemas.transfers import (
     TransferCreateRequest,
     TransferCreateResponse,
+    TransferUpdateRequest,
+    TransferUpdateResponse,
     RecurringTransferCreateRequest,
     RecurringTransferCreateResponse,
 )
@@ -95,6 +97,99 @@ async def create_transfer(
     except Exception as e:
         logger.error(f"Error creating transfer: {e}")
         raise HTTPException(status_code=500, detail={"error": "internal_error", "details": "Failed to create transfer"})
+
+
+@router.patch(
+    "/{transaction_id}",
+    response_model=TransferUpdateResponse,
+    status_code=200,
+    summary="Update a transfer"
+)
+async def update_transfer(
+    transaction_id: str,
+    request: TransferUpdateRequest,
+    user: Annotated[AuthenticatedUser, Depends(get_authenticated_user)]
+):
+    """
+    Update an existing transfer.
+    
+    Updates both paired transactions atomically with the same values.
+    
+    **Allowed Updates:**
+    - `amount`: New transfer amount (must be > 0)
+    - `date`: New transfer date (ISO-8601 format)
+    - `description`: New description for both transactions
+    
+    **Immutable Fields:**
+    - `category_id` (transfers must use system 'transfer' category)
+    - `flow_type` (outcome/income are fixed by design)
+    - `paired_transaction_id` (cannot be changed)
+    - `account_id` (would break the transfer structure)
+    
+    **Requirements:**
+    - Transaction must be a transfer (have `paired_transaction_id`)
+    - Transaction must belong to the authenticated user
+    - At least one field must be provided for update
+    
+    **Returns:**
+    - 200 OK: Transfer updated successfully
+    - 400 BAD REQUEST: Not a transfer or validation error
+    - 401 UNAUTHORIZED: Missing or invalid authentication
+    - 404 NOT FOUND: Transaction not found
+    - 500 INTERNAL SERVER ERROR: Database error
+    """
+    user_id = user.user_id
+    supabase_client = get_supabase_client(user.access_token)
+    
+    logger.info(
+        f"PATCH /transfers/{transaction_id}: user {user_id} updating transfer"
+    )
+    
+    # Validate at least one field provided
+    if request.amount is None and request.date is None and request.description is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "validation_error",
+                "details": "At least one field (amount, date, or description) must be provided"
+            }
+        )
+    
+    try:
+        updated_txn, paired_txn = await transfer_service.update_transfer(
+            supabase_client=supabase_client,
+            user_id=user_id,
+            transaction_id=transaction_id,
+            amount=request.amount,
+            date=request.date,
+            description=request.description
+        )
+        
+        # Map the two transaction dicts to TransactionDetailResponse
+        transactions = [
+            TransactionDetailResponse(**updated_txn),
+            TransactionDetailResponse(**paired_txn)
+        ]
+        
+        return TransferUpdateResponse(
+            status="UPDATED",
+            transactions=transactions,
+            message="Transfer updated successfully"
+        )
+    
+    except ValueError as e:
+        logger.warning(f"Validation error updating transfer: {e}")
+        error_msg = str(e)
+        if "not found" in error_msg.lower() or "not accessible" in error_msg.lower():
+            raise HTTPException(status_code=404, detail={"error": "not_found", "details": str(e)})
+        elif "not a transfer" in error_msg.lower():
+            raise HTTPException(status_code=400, detail={"error": "not_a_transfer", "details": str(e)})
+        else:
+            raise HTTPException(status_code=400, detail={"error": "validation_error", "details": str(e)})
+    
+    except Exception as e:
+        logger.error(f"Error updating transfer: {e}")
+        raise HTTPException(status_code=500, detail={"error": "internal_error", "details": "Failed to update transfer"})
 
 
 @router.post(

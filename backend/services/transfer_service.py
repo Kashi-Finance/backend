@@ -117,6 +117,96 @@ async def create_transfer(
     return (outgoing_transaction, incoming_transaction)
 
 
+async def update_transfer(
+    supabase_client: Any,
+    user_id: str,
+    transaction_id: str,
+    amount: Optional[float] = None,
+    date: Optional[str] = None,
+    description: Optional[str] = None
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Update a transfer by updating both paired transactions atomically.
+    
+    Uses RPC function `update_transfer` for atomic update.
+    
+    Args:
+        supabase_client: Authenticated Supabase client
+        user_id: User UUID from auth token
+        transaction_id: UUID of either transaction in the pair
+        amount: New amount (optional, must be > 0 if provided)
+        date: New date in ISO-8601 format (optional)
+        description: New description (optional)
+        
+    Returns:
+        Tuple of (updated_transaction, updated_paired_transaction) dicts
+        
+    Raises:
+        ValueError: If transaction not found, not a transfer, or validation fails
+        Exception: If RPC call fails
+        
+    Security:
+        - RPC validates ownership and atomicity
+        - Only amount, date, and description can be updated
+        - Both transactions receive identical updates
+        
+    Notes:
+        - category_id, flow_type, paired_transaction_id, and account_id are immutable
+        - If any field is not provided (None), it remains unchanged
+    """
+    logger.info(f"Updating transfer for user {user_id}: transaction {transaction_id}")
+    
+    # Validate amount if provided
+    if amount is not None and amount <= 0:
+        raise ValueError("Amount must be greater than 0")
+    
+    # Call RPC function for atomic transfer update
+    result = supabase_client.rpc(
+        'update_transfer',
+        {
+            'p_transaction_id': transaction_id,
+            'p_user_id': user_id,
+            'p_amount': amount,
+            'p_date': date,
+            'p_description': description
+        }
+    ).execute()
+    
+    if not result.data or len(result.data) == 0:
+        raise Exception("RPC update_transfer failed: no data returned")
+    
+    rpc_result = result.data[0]
+    updated_id = rpc_result['updated_transaction_id']
+    paired_id = rpc_result['updated_paired_transaction_id']
+    
+    # Fetch both updated transactions for return value
+    updated_result = (
+        supabase_client.table("transaction")
+        .select("*")
+        .eq("id", updated_id)
+        .execute()
+    )
+    
+    paired_result = (
+        supabase_client.table("transaction")
+        .select("*")
+        .eq("id", paired_id)
+        .execute()
+    )
+    
+    if not updated_result.data or not paired_result.data:
+        raise Exception("Failed to fetch updated transactions")
+    
+    updated_transaction = updated_result.data[0]
+    paired_transaction = paired_result.data[0]
+    
+    logger.info(
+        f"Transfer updated via RPC: {updated_id} <-> {paired_id}"
+    )
+    
+    return (updated_transaction, paired_transaction)
+
+
 async def delete_transfer(
     supabase_client: Any,
     user_id: str,
@@ -290,74 +380,3 @@ async def create_recurring_transfer(
     )
     
     return (outgoing_rule, incoming_rule)
-
-
-async def delete_recurring_transfer(
-    supabase_client: Any,
-    user_id: str,
-    recurring_transaction_id: str
-) -> Tuple[str, str]:
-    """
-    Delete a recurring transfer by deleting both paired rules.
-    
-    Args:
-        supabase_client: Authenticated Supabase client
-        user_id: User UUID from auth token
-        recurring_transaction_id: UUID of either rule in the pair
-        
-    Returns:
-        Tuple of (deleted_rule_id, paired_rule_id)
-        
-    Raises:
-        ValueError: If rule not found or not a recurring transfer
-        Exception: If deletion fails
-        
-    Security:
-        RLS enforces user_id = auth.uid() on deletes
-    """
-    logger.info(
-        f"Deleting recurring transfer for user {user_id}: "
-        f"rule {recurring_transaction_id}"
-    )
-    
-    # Fetch the rule
-    rule_result = (
-        supabase_client.table("recurring_transaction")
-        .select("id, paired_recurring_transaction_id, user_id")
-        .eq("id", recurring_transaction_id)
-        .eq("user_id", user_id)
-        .execute()
-    )
-    
-    if not rule_result.data or len(rule_result.data) == 0:
-        raise ValueError(
-            f"Recurring transaction {recurring_transaction_id} not found or not accessible"
-        )
-    
-    rule = rule_result.data[0]
-    paired_id = rule.get("paired_recurring_transaction_id")
-    
-    if not paired_id:
-        raise ValueError(
-            f"Recurring transaction {recurring_transaction_id} is not part of a transfer"
-        )
-    
-    # Delete both rules
-    # The DB ON DELETE SET NULL will handle clearing the references
-    delete_main = (
-        supabase_client.table("recurring_transaction")
-        .delete()
-        .eq("id", recurring_transaction_id)
-        .execute()
-    )
-    
-    delete_paired = (
-        supabase_client.table("recurring_transaction")
-        .delete()
-        .eq("id", paired_id)
-        .execute()
-    )
-    
-    logger.info(f"Recurring transfer deleted: {recurring_transaction_id} and {paired_id}")
-    
-    return (recurring_transaction_id, paired_id)

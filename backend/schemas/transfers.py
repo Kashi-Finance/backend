@@ -8,9 +8,10 @@ owned by the same user. They are represented as paired transaction records.
 from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
-
 # Import TransactionDetailResponse for reuse
 from backend.schemas.transactions import TransactionDetailResponse
+# Import RecurringTransactionResponse for reuse
+from backend.schemas.recurring_transactions import RecurringTransactionResponse
 
 
 # --- Normal Transfer Schemas ---
@@ -56,6 +57,41 @@ class TransferCreateResponse(BaseModel):
     message: str = Field(..., description="Success message")
 
 
+class TransferUpdateRequest(BaseModel):
+    """
+    Request for updating a transfer.
+    
+    Updates both paired transactions atomically with the same values.
+    Only amount, date, and description can be updated.
+    All other fields (category, flow_type, accounts) are immutable.
+    """
+    amount: Optional[float] = Field(None, description="New amount (must be > 0)", gt=0)
+    date: Optional[str] = Field(None, description="New date (ISO-8601 format)")
+    description: Optional[str] = Field(None, description="New description for both transactions")
+    
+    @field_validator("description")
+    @classmethod
+    def validate_description_not_empty_if_provided(cls, v: Optional[str]) -> Optional[str]:
+        """Ensure description is not just whitespace if provided."""
+        if v is not None and v.strip() == "":
+            return None
+        return v
+
+
+class TransferUpdateResponse(BaseModel):
+    """
+    Response after updating a transfer.
+    
+    Returns both updated transaction records to maintain consistency.
+    """
+    status: Literal["UPDATED"] = "UPDATED"
+    transactions: List[TransactionDetailResponse] = Field(
+        ...,
+        description="Array of two updated transactions: [0] = outcome, [1] = income"
+    )
+    message: str = Field(..., description="Success message")
+
+
 class TransferDeleteResponse(BaseModel):
     """Response after deleting a transfer."""
     status: Literal["DELETED"] = "DELETED"
@@ -69,10 +105,6 @@ class TransferDeleteResponse(BaseModel):
 # --- Recurring Transfer Schemas ---
 
 RecurringFrequency = Literal["daily", "weekly", "monthly", "yearly"]
-
-
-# Import RecurringTransactionResponse for reuse
-from backend.schemas.recurring_transactions import RecurringTransactionResponse
 
 
 class RecurringTransferCreateRequest(BaseModel):
