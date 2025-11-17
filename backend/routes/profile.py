@@ -343,7 +343,7 @@ async def create_profile(
     description="""
     Delete (anonymize) the authenticated user's profile.
     
-    IMPORTANT: Following DB documentation delete rule:
+    IMPORTANT: Following DB delete rule:
     - Profile is NOT physically deleted
     - Instead, personal fields are cleared/anonymized
     - Country and currency_preference are kept for system consistency

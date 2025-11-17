@@ -12,7 +12,6 @@ CRITICAL SECURITY RULES:
 """
 
 import logging
-from typing import Optional
 
 from supabase import create_client, Client
 

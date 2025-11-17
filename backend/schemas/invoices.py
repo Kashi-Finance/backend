@@ -185,16 +185,17 @@ class InvoiceCommitRequest(BaseModel):
     - Create an invoice record with the uploaded image reference
     - Create a linked transaction record with the invoice_id reference
     """
-    store_name: str = Field(..., description="Merchant/store name")
-    transaction_time: str = Field(..., description="ISO-8601 datetime of purchase")
-    total_amount: float = Field(..., description="Total amount as number (e.g., 128.50)")
-    currency: str = Field(..., description="Currency code (e.g., 'GTQ')")
-    purchased_items: str = Field(
+    store_name: str = Field(..., min_length=1, description="Merchant/store name")
+    transaction_time: str = Field(..., min_length=1, description="ISO-8601 datetime of purchase")
+    total_amount: float = Field(..., gt=0, description="Total amount as number (e.g., 128.50)")
+    currency: str = Field(..., min_length=1, description="Currency code (e.g., 'GTQ')")
+    purchased_items: str | List[str] = Field(
         ...,
-        description="Formatted multi-line list of purchased items"
+        description="Formatted multi-line list of purchased items (string) OR array of item strings (will be joined)"
     )
     image_base64: str = Field(
         ...,
+        min_length=10,
         description="Receipt image as base64 string (will be uploaded to storage)"
     )
     image_filename: str = Field(
@@ -203,12 +204,32 @@ class InvoiceCommitRequest(BaseModel):
     )
     account_id: str = Field(
         ...,
+        min_length=1,
         description="UUID of the account this transaction belongs to (user-selected)"
     )
     category_id: str = Field(
         ...,
+        min_length=1,
         description="UUID of the expense category (user-selected or from suggestion)"
     )
+    
+    @model_validator(mode="after")
+    def normalize_purchased_items(self):
+        """
+        Normalize purchased_items to always be a string.
+        
+        If frontend sends an array, join it with newlines.
+        This provides backward compatibility while frontend migrates to string format.
+        """
+        if isinstance(self.purchased_items, list):
+            self.purchased_items = "\n".join(self.purchased_items)
+        return self
+    
+    # Pydantic v2 config: enable type coercion, strip whitespace, forbid extra fields
+    model_config = {
+        "str_strip_whitespace": True,
+        "extra": "forbid"  # Reject requests with unexpected fields
+    }
 
 
 class InvoiceCommitResponse(BaseModel):
@@ -260,15 +281,16 @@ class InvoiceListResponse(BaseModel):
 
 class InvoiceDeleteResponse(BaseModel):
     """
-    Response after successfully deleting an invoice.
+    Response after successfully soft-deleting an invoice.
     """
     status: Literal["DELETED"] = Field(
         "DELETED",
-        description="Indicates the invoice was successfully deleted"
+        description="Indicates the invoice was successfully soft-deleted"
     )
-    invoice_id: str = Field(..., description="UUID of deleted invoice record")
+    invoice_id: str = Field(..., description="UUID of soft-deleted invoice record")
+    deleted_at: str = Field(..., description="ISO-8601 timestamp when invoice was soft-deleted")
     message: str = Field(
         ...,
         description="Success message",
-        examples=["Invoice deleted successfully"]
+        examples=["Invoice soft-deleted successfully"]
     )

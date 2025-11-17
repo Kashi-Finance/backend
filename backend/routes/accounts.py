@@ -3,7 +3,7 @@ Account CRUD API endpoints.
 
 Provides endpoints for managing user financial accounts (cash, bank, credit card, etc.).
 Accounts track balances via transaction history and support two deletion strategies
-per DB documentation rules.
+per DB rules.
 """
 
 import logging
@@ -181,7 +181,23 @@ async def create_new_account(
     
     supabase_client = get_supabase_client(auth_user.access_token)
     
+    # Validate initial balance requirements
+    if request.initial_balance is not None and request.initial_balance > 0:
+        if not request.initial_balance_category_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "invalid_request",
+                    "details": "initial_balance_category_id is required when initial_balance is provided"
+                }
+            )
+    
     try:
+        # Import transaction service for initial balance
+        from backend.services.transaction_service import create_transaction
+        from backend.utils.constants import SYSTEM_GENERATED_KEYS
+        from datetime import datetime
+        
         created_account = await create_account(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
@@ -189,6 +205,29 @@ async def create_new_account(
             account_type=request.type,
             currency=request.currency
         )
+        
+        account_id = created_account.get("id")
+        
+        # Create initial balance transaction if provided
+        if request.initial_balance is not None and request.initial_balance > 0:
+            logger.info(
+                f"Creating initial balance transaction: "
+                f"account={account_id}, amount={request.initial_balance}"
+            )
+            
+            await create_transaction(
+                supabase_client=supabase_client,
+                user_id=auth_user.user_id,
+                account_id=str(account_id),
+                category_id=request.initial_balance_category_id,  # type: ignore
+                flow_type="income",  # Initial balance is income
+                amount=request.initial_balance,
+                date=datetime.utcnow().isoformat(),
+                description="Initial balance",
+                system_generated_key=SYSTEM_GENERATED_KEYS['INITIAL_BALANCE']
+            )
+            
+            logger.info(f"Initial balance transaction created for account {account_id}")
         
         # Helper to coerce DB values to strings
         def _as_str(v: Any) -> str:
@@ -450,17 +489,21 @@ async def delete_existing_account(
                 account_id=account_id,
                 target_account_id=request.target_account_id  # type: ignore
             )
-            message = f"Account deleted successfully. {transactions_affected} transactions reassigned."
+            message = f"Account soft-deleted successfully. {transactions_affected} transactions reassigned."
         else:  # delete_transactions
-            transactions_affected = await delete_account_with_transactions(
+            recurring_count, transaction_count = await delete_account_with_transactions(
                 supabase_client=supabase_client,
                 user_id=auth_user.user_id,
                 account_id=account_id
             )
-            message = f"Account deleted successfully. {transactions_affected} transactions deleted."
+            transactions_affected = transaction_count
+            message = (
+                f"Account soft-deleted successfully. "
+                f"{recurring_count} recurring templates and {transaction_count} transactions soft-deleted."
+            )
         
         logger.info(
-            f"Account {account_id} deleted successfully. "
+            f"Account {account_id} soft-deleted successfully. "
             f"{transactions_affected} transactions affected."
         )
         
