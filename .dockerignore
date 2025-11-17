@@ -38,8 +38,11 @@ htmlcov/
 
 # Documentation and markdown files (not needed in container)
 *.md
-*.txt
 docs/
+
+# Text files - EXCEPT requirements.txt which is needed for build
+*.txt
+!requirements.txt
 
 # Configuration files (should be set via environment variables)
 .env
