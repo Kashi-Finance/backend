@@ -417,13 +417,21 @@ async def update_user_category(
     status_code=status.HTTP_200_OK,
     summary="Delete a user category",
     description="""
-    Delete a user category following DB deletion rules.
+    Delete a user category following DB deletion rules (FLOW-TYPE AWARE).
     
-    This endpoint:
-    - Reassigns all transactions using this category to the 'general' system category
+    This endpoint supports two deletion modes:
+    
+    **Default mode (cascade=false, recommended):**
+    - Reassigns all transactions to the flow-type-matched 'general' system category
+      * If deleted category is 'outcome', reassigns to 'general' outcome category
+      * If deleted category is 'income', reassigns to 'general' income category
     - Removes all budget_category links
     - Deletes the category
-    - Cannot delete system categories
+    
+    **Cascade mode (cascade=true):**
+    - Deletes all transactions referencing this category
+    - Removes all budget_category links
+    - Deletes the category
     
     Security:
     - Requires valid authentication token
@@ -431,22 +439,25 @@ async def update_user_category(
     - System categories are protected from deletion
     
     DB Rules:
-    1. Update all transactions using category_id to 'general' system category
-    2. Remove all budget_category links
-    3. Delete the category
-    4. System categories CANNOT be deleted
+    1. Determine flow_type of deleted category
+    2. Find matching 'general' system category (key='general', same flow_type)
+    3. Reassign transactions to flow-type-matched general (or cascade delete if requested)
+    4. Remove all budget_category links
+    5. Delete the category
     """
 )
 async def delete_user_category(
     category_id: str,
-    auth_user: Annotated[AuthenticatedUser, Depends(get_authenticated_user)]
+    auth_user: Annotated[AuthenticatedUser, Depends(get_authenticated_user)],
+    cascade: bool = False,
 ) -> CategoryDeleteResponse:
     """
-    Delete a user category (with DB rule enforcement).
+    Delete a user category (with flow-type aware DB rule enforcement).
     
     Args:
         category_id: UUID of the category to delete
         auth_user: Authenticated user from token
+        cascade: If True, delete transactions instead of reassigning (default: False)
     
     Returns:
         CategoryDeleteResponse with deletion details
@@ -455,15 +466,17 @@ async def delete_user_category(
         HTTPException 400: If trying to delete system category
         HTTPException 404: If category not found or not accessible
     """
-    logger.info(f"Deleting category {category_id} for user {auth_user.user_id}")
+    mode = "CASCADE" if cascade else "REASSIGN"
+    logger.info(f"Deleting category {category_id} for user {auth_user.user_id} (mode={mode})")
     
     supabase_client = get_supabase_client(auth_user.access_token)
     
     try:
-        success, transactions_reassigned, budget_links_removed = await delete_category(
+        success, transactions_reassigned, budget_links_removed, transactions_deleted = await delete_category(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
-            category_id=category_id
+            category_id=category_id,
+            cascade=cascade
         )
         
         if not success:
@@ -476,22 +489,35 @@ async def delete_user_category(
                 }
             )
         
-        logger.info(
-            f"Category {category_id} deleted successfully: "
-            f"{transactions_reassigned} transactions reassigned, "
-            f"{budget_links_removed} budget links removed"
-        )
+        if cascade:
+            logger.info(
+                f"Category {category_id} deleted successfully (CASCADE): "
+                f"{transactions_deleted} transactions deleted, "
+                f"{budget_links_removed} budget links removed"
+            )
+            message = (
+                f"Category deleted successfully. "
+                f"{transactions_deleted} transaction(s) deleted, "
+                f"{budget_links_removed} budget link(s) removed."
+            )
+        else:
+            logger.info(
+                f"Category {category_id} deleted successfully (REASSIGN): "
+                f"{transactions_reassigned} transactions reassigned to flow-type-matched 'general', "
+                f"{budget_links_removed} budget links removed"
+            )
+            message = (
+                f"Category deleted successfully. "
+                f"{transactions_reassigned} transaction(s) reassigned to flow-type-matched 'general', "
+                f"{budget_links_removed} budget link(s) removed."
+            )
         
         return CategoryDeleteResponse(
             status="DELETED",
             category_id=str(category_id),
             transactions_reassigned=transactions_reassigned,
             budget_links_removed=budget_links_removed,
-            message=(
-                f"Category deleted successfully. "
-                f"{transactions_reassigned} transaction(s) reassigned to 'general', "
-                f"{budget_links_removed} budget link(s) removed."
-            )
+            message=message
         )
         
     except HTTPException:

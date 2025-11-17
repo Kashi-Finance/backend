@@ -1,13 +1,21 @@
 """
 Category persistence service.
 
-CRITICAL RULES (from DB documentation.md):
+CRITICAL RULES (from DB-documentation.md):
 1. System categories (user_id IS NULL, key present) are read-only and CANNOT be deleted
-2. When deleting a user category:
-   - Update all transactions using that category_id to the 'general' system category
-   - Remove all budget_category links
-   - Then delete the category
-3. RLS is enforced automatically via the authenticated Supabase client
+2. System categories use UNIQUE constraint on (key, flow_type)
+3. When deleting a user category (FLOW-TYPE AWARE):
+   - Default mode (cascade=False):
+     * Determine the flow_type of the deleted category
+     * Find matching 'general' system category (key='general', same flow_type)
+     * Reassign all transactions to flow-type-matched general category
+     * Remove all budget_category links
+     * Delete the category
+   - Cascade mode (cascade=True):
+     * Delete all transactions referencing the category
+     * Remove all budget_category links
+     * Delete the category
+4. RLS is enforced automatically via the authenticated Supabase client
 """
 
 import logging
@@ -226,23 +234,40 @@ async def delete_category(
     supabase_client: Client,
     user_id: str,
     category_id: str,
-) -> tuple[bool, int, int]:
+    cascade: bool = False,
+) -> tuple[bool, int, int, int]:
     """
     Delete a user category following DB deletion rules.
     
-    DB Documentation Rule:
-    1. Update all transactions using this category_id to the 'general' system category
-    2. Remove all budget_category links
-    3. Delete the category
-    4. System categories CANNOT be deleted
+    DB Rule (FLOW-TYPE AWARE):
+    - Default (cascade=False):
+      1. Determine the flow_type of the category being deleted
+      2. Find the matching 'general' system category (key='general', same flow_type)
+      3. Reassign all transactions to the flow-type-matched general category
+      4. Remove all budget_category links
+      5. Delete the category
+    
+    - Cascade Mode (cascade=True):
+      1. Delete all transactions referencing this category (ON DELETE CASCADE behavior)
+      2. Remove all budget_category links
+      3. Delete the category
+    
+    - System categories CANNOT be deleted
+    
+    Flow-Type Matching:
+    - If deleted category is flow_type='outcome', reassigns to 'general' outcome category
+    - If deleted category is flow_type='income', reassigns to 'general' income category
     
     Args:
         supabase_client: Authenticated Supabase client
         user_id: The authenticated user's ID
         category_id: UUID of the category to delete
+        cascade: If True, delete transactions instead of reassigning (default: False)
     
     Returns:
-        Tuple of (success, transactions_reassigned_count, budget_links_removed_count)
+        Tuple of (success, transactions_reassigned, budget_links_removed, transactions_deleted)
+        - transactions_reassigned: count when cascade=False
+        - transactions_deleted: count when cascade=True
     
     Raises:
         Exception: If trying to delete a system category or if DB operation fails
@@ -255,13 +280,14 @@ async def delete_category(
     existing = await get_category_by_id(supabase_client, user_id, category_id)
     if not existing:
         logger.warning(f"Cannot delete category {category_id}: not found or not accessible by user {user_id}")
-        return (False, 0, 0)
+        return (False, 0, 0, 0)
     
     # Prevent deleting system categories
     if existing.get("user_id") is None:
         raise Exception("Cannot delete system category")
     
-    logger.info(f"Preparing to delete category {category_id} for user {user_id}")
+    mode = "CASCADE" if cascade else "REASSIGN"
+    logger.info(f"Preparing to delete category {category_id} for user {user_id} (mode={mode})")
 
     # Delegate reassign + delete to DB RPC for atomicity (avoids race conditions)
     try:
@@ -270,21 +296,25 @@ async def delete_category(
             {
                 "p_category_id": category_id,
                 "p_user_id": user_id,
+                "p_cascade": cascade,
             },
         ).execute()
 
         data = getattr(rpc_res, "data", None)
         if not isinstance(data, list) or len(data) == 0:
             logger.warning(f"RPC delete_category_reassign returned no rows for category {category_id}")
-            return (False, 0, 0)
+            return (False, 0, 0, 0)
 
         row = cast(Dict[str, Any], data[0])
         transactions_reassigned = int(row.get("transactions_reassigned") or 0)
         budget_links_removed = int(row.get("budget_links_removed") or 0)
+        transactions_deleted = int(row.get("transactions_deleted") or 0)
+        
         logger.info(
-            f"Category {category_id} deleted via RPC: reassigned={transactions_reassigned}, links_removed={budget_links_removed}"
+            f"Category {category_id} deleted via RPC (mode={mode}): "
+            f"reassigned={transactions_reassigned}, deleted={transactions_deleted}, links_removed={budget_links_removed}"
         )
-        return (True, transactions_reassigned, budget_links_removed)
+        return (True, transactions_reassigned, budget_links_removed, transactions_deleted)
     except Exception as e:
         logger.error(f"Failed to delete category via RPC for {category_id}: {e}", exc_info=True)
         raise
