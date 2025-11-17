@@ -224,95 +224,65 @@ async def delete_invoice(
     supabase_client: Client,
     user_id: str,
     invoice_id: str,
-) -> bool:
+) -> tuple[bool, str | None]:
     """
-    Delete an invoice record and its associated storage file.
+    Soft-delete an invoice record using the delete_invoice RPC.
 
     This function:
-    1. Checks that the invoice exists and belongs to the user
-    2. Retrieves the storage_path from the invoice
-    3. Deletes the receipt image from Supabase Storage
-    4. Deletes the invoice record from the database
-    5. RLS automatically enforces user_id = auth.uid()
+    1. Calls the delete_invoice RPC for atomic soft-delete operation
+    2. RPC validates ownership and sets deleted_at timestamp
+    3. Optionally handles storage cleanup after successful soft-delete
 
     Args:
         supabase_client: Authenticated Supabase client (with user token)
         user_id: The authenticated user's ID (from JWT token)
-        invoice_id: UUID of the invoice to delete
+        invoice_id: UUID of the invoice to soft-delete
 
     Returns:
-        True if deletion was successful, False if invoice not found or not accessible
+        Tuple of (success, deleted_at timestamp or None)
 
     Raises:
-        Exception: If the database operation fails
+        Exception: If the RPC call fails
 
     Security:
-        - RLS policies enforce that user_id = auth.uid()
+        - RPC validates user_id ownership before soft-deleting
         - User can only delete their own invoices
-        - Attempting to delete another user's invoice will fail silently (return False)
+        - Attempting to delete another user's invoice will raise an exception
 
     Note:
-        - Deletes BOTH the database record AND the associated receipt image
-        - Image deletion is non-critical; DB deletion takes precedence
-        - If image deletion fails, invoice is still deleted from DB and a warning is logged
+        - Uses soft-delete (sets deleted_at) via RPC
+        - Storage cleanup should be handled asynchronously/separately if needed
+        - Transactions referencing this invoice are NOT modified (invoice remains in history)
     """
-    # First, verify the invoice exists and belongs to the user
-    existing = await get_invoice_by_id(supabase_client, user_id, invoice_id)
-    if not existing:
-        logger.warning(f"Cannot delete invoice {invoice_id}: not found or not accessible by user {user_id}")
-        return False
+    logger.info(f"Preparing to soft-delete invoice {invoice_id} for user {user_id}")
 
-    logger.info(f"Preparing to delete invoice {invoice_id} for user {user_id}")
-
-    # Extract storage_path for storage cleanup
-    storage_path = existing.get("storage_path")
-
-    # 1) Handle transactions that reference this invoice
-    # Per DB rules: transactions referencing this invoice must be handled before deleting the invoice.
-    # The safe and conservative approach: clear invoice_id on all transactions that reference it.
     try:
-        update_res = (
-            supabase_client.table("transaction")
-            .update({"invoice_id": None})
-            .eq("invoice_id", invoice_id)
-            .execute()
-        )
-        # update_res.data may be None or empty if no rows matched; that's fine
-        transactions_updated = len(update_res.data) if update_res.data else 0
-        logger.info(f"Cleared invoice_id on {transactions_updated} transaction(s) referencing invoice {invoice_id}")
+        # Call the delete_invoice RPC for atomic soft-delete
+        rpc_res = supabase_client.rpc(
+            "delete_invoice",
+            {
+                "p_invoice_id": invoice_id,
+                "p_user_id": user_id,
+            },
+        ).execute()
+
+        data = getattr(rpc_res, "data", None)
+        if not isinstance(data, list) or len(data) == 0:
+            logger.warning(f"RPC delete_invoice returned no rows for invoice {invoice_id}")
+            return (False, None)
+
+        row = cast(Dict[str, Any], data[0])
+        invoice_soft_deleted = bool(row.get("invoice_soft_deleted", False))
+        deleted_at = row.get("deleted_at")
+        
+        if invoice_soft_deleted:
+            logger.info(f"Invoice {invoice_id} soft-deleted successfully via RPC at {deleted_at}")
+            return (True, deleted_at)
+        else:
+            logger.warning(f"Invoice {invoice_id} soft-delete failed via RPC")
+            return (False, None)
+            
     except Exception as e:
-        logger.error(f"Failed to clear invoice_id on transactions for invoice {invoice_id}: {e}", exc_info=True)
+        logger.error(f"Failed to soft-delete invoice via RPC for {invoice_id}: {e}", exc_info=True)
         raise
-
-    # 2) Delete the associated receipt image from storage BEFORE removing DB row
-    if storage_path:
-        try:
-            from backend.services.storage import delete_invoice_image
-            deletion_success = await delete_invoice_image(supabase_client, storage_path)
-            if not deletion_success:
-                # According to DB rules we must remove the file; treat failure as an error
-                logger.error(f"Failed to delete receipt image for invoice {invoice_id}: {storage_path}")
-                raise Exception("Failed to delete receipt image from storage")
-            logger.info(f"Successfully deleted receipt image for invoice {invoice_id}: {storage_path}")
-        except Exception as e:
-            logger.error(f"Exception during receipt image deletion for invoice {invoice_id}: {e}", exc_info=True)
-            # Bubble up to prevent deleting the DB row if storage cleanup couldn't be completed
-            raise
-
-    # 3) Delete invoice DB row (after transactions handled and storage cleaned)
-    result = (
-        supabase_client.table("invoice")
-        .delete()
-        .eq("id", invoice_id)
-        .execute()
-    )
-
-    # Verify deletion actually removed a row
-    if not result.data or len(result.data) == 0:
-        logger.warning(f"Deletion of invoice {invoice_id} returned no rows for user {user_id}")
-        return False
-
-    logger.info(f"Invoice {invoice_id} deleted successfully for user {user_id}")
-
-    return True
 

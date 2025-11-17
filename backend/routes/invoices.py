@@ -10,7 +10,7 @@ Flow:
 
 import base64
 import logging
-from typing import Annotated
+from typing import Annotated, Any
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
 from backend.auth.dependencies import get_authenticated_user, AuthenticatedUser
@@ -254,7 +254,7 @@ async def process_invoice_ocr(
             )
 
         # Validate category_suggestion exists and has the required match_type
-        cs = agent_output.get("category_suggestion") or {}
+        cs: Any = agent_output.get("category_suggestion") or {}
         match_type = cs.get("match_type")
         if match_type not in ("EXISTING", "NEW_PROPOSED"):
             logger.debug("Agent returned missing or invalid category_suggestion; defaulting to NEW_PROPOSED")
@@ -446,6 +446,13 @@ async def commit_invoice(
     
     try:
         # Persist invoice to database
+        # Ensure purchased_items is a string when passed to create_invoice.
+        # The DB/service layer expects a single formatted string.
+        if isinstance(request.purchased_items, list):
+            purchased_items_str = "\n".join(request.purchased_items)
+        else:
+            purchased_items_str = request.purchased_items
+
         created_invoice = await create_invoice(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
@@ -454,7 +461,7 @@ async def commit_invoice(
             transaction_time=request.transaction_time,
             total_amount=request.total_amount,
             currency=request.currency,
-            purchased_items=request.purchased_items,
+            purchased_items=purchased_items_str,
         )
         
         invoice_id = created_invoice.get("id")
@@ -468,6 +475,8 @@ async def commit_invoice(
         )
         
         # Create linked transaction
+        from backend.utils.constants import SYSTEM_GENERATED_KEYS
+        
         created_transaction = await create_transaction(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
@@ -478,6 +487,7 @@ async def commit_invoice(
             date=request.transaction_time,
             description=request.store_name,
             invoice_id=str(invoice_id),  # Link to invoice
+            system_generated_key=SYSTEM_GENERATED_KEYS['INVOICE_OCR']  # Mark as OCR-generated
         )
         
         transaction_id = created_transaction.get("id")
@@ -734,8 +744,8 @@ async def delete_invoice_record(
     supabase_client = get_supabase_client(auth_user.access_token)
     
     try:
-        # Delete invoice and storage (service handles RLS enforcement)
-        success = await delete_invoice(
+        # Soft-delete invoice via RPC (service handles RLS enforcement)
+        success, deleted_at = await delete_invoice(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
             invoice_id=invoice_id,
@@ -753,12 +763,13 @@ async def delete_invoice_record(
                 }
             )
         
-        logger.info(f"Invoice {invoice_id} deleted successfully for user {auth_user.user_id}")
+        logger.info(f"Invoice {invoice_id} soft-deleted successfully for user {auth_user.user_id} at {deleted_at}")
         
         return InvoiceDeleteResponse(
             status="DELETED",
             invoice_id=str(invoice_id),
-            message="Invoice deleted successfully"
+            deleted_at=str(deleted_at),
+            message="Invoice soft-deleted successfully"
         )
         
     except HTTPException:
