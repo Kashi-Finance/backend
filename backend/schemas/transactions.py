@@ -94,6 +94,7 @@ class TransactionDetailResponse(BaseModel):
     amount: float = Field(..., description="Transaction amount")
     date: str = Field(..., description="ISO-8601 datetime when transaction occurred")
     description: Optional[str] = Field(None, description="Transaction description/note")
+    embedding: Optional[list] = Field(None, description="Semantic vector (pgvector) for AI similarity search")
     paired_transaction_id: Optional[str] = Field(
         None,
         description="UUID of paired transaction if this is part of an internal transfer"

@@ -8,7 +8,7 @@ They may be created manually by users or automatically from invoice OCR.
 """
 
 import logging
-from typing import Annotated, Optional
+from typing import Annotated, Optional, cast, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from backend.auth.dependencies import get_authenticated_user, AuthenticatedUser
@@ -33,6 +33,34 @@ from backend.schemas.transactions import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
+
+
+def _require_field(data: dict, key: str):
+    """Return data[key] or raise ValueError if missing/None."""
+    val = data.get(key)
+    if val is None:
+        raise ValueError(f"Missing required field '{key}' in transaction data")
+    return val
+
+
+def _coerce_flow_type(data: dict, key: str) -> Literal["income", "outcome"]:
+    val = _require_field(data, key)
+    if val not in ("income", "outcome"):
+        raise ValueError(f"Invalid flow_type: {val}")
+    return cast(Literal["income", "outcome"], val)
+
+
+def _coerce_float(data: dict, key: str) -> float:
+    val = _require_field(data, key)
+    try:
+        return float(val)
+    except Exception:
+        raise ValueError(f"Field '{key}' is not convertible to float: {val}")
+
+
+def _coerce_str(data: dict, key: str) -> str:
+    return str(_require_field(data, key))
+
 
 
 @router.post(
@@ -116,19 +144,20 @@ async def create_transaction_record(
         if not transaction_id:
             raise Exception("Transaction created but no ID returned")
         
-        # Map to response model
+        # Map to response model (validate and coerce required fields)
         transaction_detail = TransactionDetailResponse(
             id=str(transaction_id),
             user_id=str(created_transaction.get("user_id")),
             account_id=str(created_transaction.get("account_id")),
             category_id=str(created_transaction.get("category_id")),
             invoice_id=created_transaction.get("invoice_id"),
-            flow_type=created_transaction.get("flow_type"),
-            amount=float(created_transaction.get("amount")),
-            date=created_transaction.get("date"),
+            flow_type=_coerce_flow_type(created_transaction, "flow_type"),
+            amount=_coerce_float(created_transaction, "amount"),
+            date=_coerce_str(created_transaction, "date"),
             description=created_transaction.get("description"),
+            embedding=created_transaction.get("embedding"),
             paired_transaction_id=created_transaction.get("paired_transaction_id"),
-            created_at=created_transaction.get("created_at"),
+            created_at=_coerce_str(created_transaction, "created_at"),
             updated_at=created_transaction.get("updated_at"),
         )
         
@@ -175,8 +204,9 @@ async def create_transaction_record(
     This endpoint:
     - Returns paginated list of transactions
     - Only shows transactions owned by the authenticated user (RLS enforced)
-    - Orders by date descending (newest first)
-    - Supports pagination and filtering via query parameters
+    - Supports filtering by account, category, flow type, and date range
+    - Supports sorting by date or amount
+    - Orders by date descending (newest first) by default
     
     Security:
     - Requires valid authentication token
@@ -192,6 +222,8 @@ async def list_transactions(
     flow_type: Optional[str] = Query(None, description="Filter by flow type (income/outcome)"),
     from_date: Optional[str] = Query(None, description="Filter by start date (ISO-8601)"),
     to_date: Optional[str] = Query(None, description="Filter by end date (ISO-8601)"),
+    sort_by: str = Query("date", description="Sort field (date|amount)"),
+    sort_order: str = Query("desc", description="Sort order (asc|desc)"),
 ) -> TransactionListResponse:
     """
     List all transactions for the authenticated user.
@@ -205,14 +237,16 @@ async def list_transactions(
         flow_type: Optional filter by flow type
         from_date: Optional filter by start date
         to_date: Optional filter by end date
+        sort_by: Field to sort by (date or amount, default date)
+        sort_order: Sort order (asc or desc, default desc)
     
     Returns:
         TransactionListResponse with list of transactions and pagination metadata
     """
     logger.info(
         f"Listing transactions for user {auth_user.user_id} "
-        f"(limit={limit}, offset={offset}, filters: account={account_id}, "
-        f"category={category_id}, flow_type={flow_type})"
+        f"(limit={limit}, offset={offset}, sort_by={sort_by}, sort_order={sort_order}, "
+        f"filters: account={account_id}, category={category_id}, flow_type={flow_type})"
     )
     
     # Create authenticated Supabase client
@@ -230,26 +264,30 @@ async def list_transactions(
             flow_type=flow_type,
             from_date=from_date,
             to_date=to_date,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
         
-        # Map to response models
-        transaction_responses = [
-            TransactionDetailResponse(
-                id=str(txn.get("id")),
-                user_id=str(txn.get("user_id")),
-                account_id=str(txn.get("account_id")),
-                category_id=str(txn.get("category_id")),
-                invoice_id=txn.get("invoice_id"),
-                flow_type=txn.get("flow_type"),
-                amount=float(txn.get("amount")),
-                date=txn.get("date"),
-                description=txn.get("description"),
-                paired_transaction_id=txn.get("paired_transaction_id"),
-                created_at=txn.get("created_at"),
-                updated_at=txn.get("updated_at"),
+        # Map to response models (validate & coerce required fields)
+        transaction_responses = []
+        for txn in transactions:
+            transaction_responses.append(
+                TransactionDetailResponse(
+                    id=str(txn.get("id")),
+                    user_id=str(txn.get("user_id")),
+                    account_id=str(txn.get("account_id")),
+                    category_id=str(txn.get("category_id")),
+                    invoice_id=txn.get("invoice_id"),
+                    flow_type=_coerce_flow_type(txn, "flow_type"),
+                    amount=_coerce_float(txn, "amount"),
+                    date=_coerce_str(txn, "date"),
+                    description=txn.get("description"),
+                    embedding=txn.get("embedding"),
+                    paired_transaction_id=txn.get("paired_transaction_id"),
+                    created_at=_coerce_str(txn, "created_at"),
+                    updated_at=txn.get("updated_at"),
+                )
             )
-            for txn in transactions
-        ]
         
         logger.info(f"Returning {len(transaction_responses)} transactions for user {auth_user.user_id}")
         
@@ -336,12 +374,13 @@ async def get_transaction(
             account_id=str(transaction.get("account_id")),
             category_id=str(transaction.get("category_id")),
             invoice_id=transaction.get("invoice_id"),
-            flow_type=transaction.get("flow_type"),
-            amount=float(transaction.get("amount")),
-            date=transaction.get("date"),
+            flow_type=_coerce_flow_type(transaction, "flow_type"),
+            amount=_coerce_float(transaction, "amount"),
+            date=_coerce_str(transaction, "date"),
             description=transaction.get("description"),
+            embedding=transaction.get("embedding"),
             paired_transaction_id=transaction.get("paired_transaction_id"),
-            created_at=transaction.get("created_at"),
+            created_at=_coerce_str(transaction, "created_at"),
             updated_at=transaction.get("updated_at"),
         )
         
@@ -419,6 +458,54 @@ async def update_transaction_details(
     supabase_client = get_supabase_client(auth_user.access_token)
     
     try:
+        # First, check if this is a transfer transaction
+        transaction_check = (
+            supabase_client.table("transaction")
+            .select("id, paired_transaction_id, category_id")
+            .eq("id", transaction_id)
+            .eq("user_id", auth_user.user_id)
+            .execute()
+        )
+        
+        if not transaction_check.data or len(transaction_check.data) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error": "not_found",
+                    "details": f"Transaction {transaction_id} not found or not accessible"
+                }
+            )
+        
+        # Type assertion: we know this is a dict from Supabase
+        transaction: dict = transaction_check.data[0]  # type: ignore
+        
+        # If this is a transfer (has paired_transaction_id), reject the update
+        paired_id = transaction.get("paired_transaction_id")
+        if paired_id is not None:
+            # Fetch the category to confirm it's a transfer category
+            category_id = transaction.get("category_id")
+            category_check = (
+                supabase_client.table("category")
+                .select("key")
+                .eq("id", category_id)
+                .execute()
+            )
+            
+            if category_check.data and len(category_check.data) > 0:
+                category_row: dict = category_check.data[0]  # type: ignore
+                category_key = category_row.get("key")
+                if category_key in ("transfer", "from_recurrent_transaction"):
+                    logger.warning(
+                        f"Attempted to edit transfer transaction {transaction_id} via PATCH /transactions"
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "error": "cannot_edit_transfer",
+                            "details": "This transaction is part of an internal transfer. Use PATCH /transfers/{id} to edit it."
+                        }
+                    )
+        
         # Update transaction (service handles RLS enforcement)
         updated_transaction = await update_transaction(
             supabase_client=supabase_client,
@@ -448,12 +535,13 @@ async def update_transaction_details(
             account_id=str(updated_transaction.get("account_id")),
             category_id=str(updated_transaction.get("category_id")),
             invoice_id=updated_transaction.get("invoice_id"),
-            flow_type=updated_transaction.get("flow_type"),
-            amount=float(updated_transaction.get("amount")),
-            date=updated_transaction.get("date"),
+            flow_type=_coerce_flow_type(updated_transaction, "flow_type"),
+            amount=_coerce_float(updated_transaction, "amount"),
+            date=_coerce_str(updated_transaction, "date"),
             description=updated_transaction.get("description"),
+            embedding=updated_transaction.get("embedding"),
             paired_transaction_id=updated_transaction.get("paired_transaction_id"),
-            created_at=updated_transaction.get("created_at"),
+            created_at=_coerce_str(updated_transaction, "created_at"),
             updated_at=updated_transaction.get("updated_at"),
         )
         

@@ -26,6 +26,7 @@ async def create_transaction(
     date: str,
     description: Optional[str] = None,
     invoice_id: Optional[str] = None,
+    system_generated_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Create a transaction record in Supabase.
@@ -45,6 +46,9 @@ async def create_transaction(
         date: ISO-8601 datetime when transaction occurred
         description: Optional human-readable description
         invoice_id: Optional UUID of linked invoice (if created from OCR)
+        system_generated_key: Optional short string to tag system-created transactions
+            (e.g. 'recurring_sync', 'invoice_ocr', 'initial_balance'). Database
+            column is nullable; pass None when not applicable.
 
     Returns:
         The created transaction record from Supabase (includes id, created_at, etc.)
@@ -72,6 +76,7 @@ async def create_transaction(
         "date": date,
         "description": description,
         "invoice_id": invoice_id,
+        "system_generated_key": system_generated_key,
     }
 
     logger.info(
@@ -112,9 +117,11 @@ async def get_user_transactions(
     flow_type: Optional[str] = None,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    sort_by: str = "date",
+    sort_order: str = "desc",
 ) -> List[Dict[str, Any]]:
     """
-    Fetch transactions for the authenticated user with optional filters.
+    Fetch transactions for the authenticated user with optional filters and sorting.
 
     Args:
         supabase_client: Authenticated Supabase client
@@ -126,6 +133,8 @@ async def get_user_transactions(
         flow_type: Optional filter by flow type ('income' or 'outcome')
         from_date: Optional filter by start date (ISO-8601)
         to_date: Optional filter by end date (ISO-8601)
+        sort_by: Field to sort by ('date' or 'amount', default 'date')
+        sort_order: Sort order ('asc' or 'desc', default 'desc')
 
     Returns:
         List of transaction records (RLS ensures only user's own transactions)
@@ -136,8 +145,8 @@ async def get_user_transactions(
     """
     logger.debug(
         f"Fetching transactions for user {user_id} "
-        f"(limit={limit}, offset={offset}, filters: account={account_id}, "
-        f"category={category_id}, flow_type={flow_type})"
+        f"(limit={limit}, offset={offset}, sort_by={sort_by}, sort_order={sort_order}, "
+        f"filters: account={account_id}, category={category_id}, flow_type={flow_type})"
     )
 
     # Build query with filters
@@ -154,8 +163,20 @@ async def get_user_transactions(
     if to_date:
         query = query.lte("date", to_date)
 
+    # Validate sort_by field
+    allowed_sort_fields = ["date", "amount"]
+    if sort_by not in allowed_sort_fields:
+        logger.warning(f"Invalid sort_by '{sort_by}', defaulting to 'date'")
+        sort_by = "date"
+    
+    # Validate sort_order
+    if sort_order not in ["asc", "desc"]:
+        logger.warning(f"Invalid sort_order '{sort_order}', defaulting to 'desc'")
+        sort_order = "desc"
+
     # Apply ordering and pagination
-    result = query.order("date", desc=True).range(offset, offset + limit - 1).execute()
+    is_desc = sort_order == "desc"
+    result = query.order(sort_by, desc=is_desc).range(offset, offset + limit - 1).execute()
 
     transactions = cast(List[Dict[str, Any]], result.data)
 
