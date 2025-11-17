@@ -17,9 +17,9 @@ class HealthResponse(BaseModel):
     """
     
     status: str = Field(
-        ...,
+        default="ok",
         description="Health status of the API (always 'ok' if responding)",
-        example="ok"
+        examples=["ok"]
     )
     
     class Config:
