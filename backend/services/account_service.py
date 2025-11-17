@@ -189,17 +189,18 @@ async def delete_account_with_reassignment(
     target_account_id: str
 ) -> int:
     """
-    Delete account by reassigning all transactions to another account.
+    Soft-delete account by reassigning all transactions to another account.
     
     Uses RPC function `delete_account_reassign` for atomic operation.
-    This implements DB delete rule Option 1:
-    1. Reassign all transactions to target_account_id
-    2. Delete the account
+    This implements DB delete rule Option 1 with soft-delete strategy:
+    1. Reassign all recurring templates to target_account_id
+    2. Reassign all transactions to target_account_id
+    3. Soft-delete the source account (set deleted_at)
     
     Args:
         supabase_client: Authenticated Supabase client
         user_id: The authenticated user's ID
-        account_id: The account UUID to delete
+        account_id: The account UUID to soft-delete
         target_account_id: The account UUID to receive transactions
     
     Returns:
@@ -212,13 +213,14 @@ async def delete_account_with_reassignment(
     Security:
         - RPC validates both accounts belong to user_id
         - All operations happen atomically in DB
+        - Source account is soft-deleted (deleted_at set), not physically removed
     """
     logger.info(
-        f"Deleting account {account_id} with reassignment to {target_account_id} "
+        f"Soft-deleting account {account_id} with reassignment to {target_account_id} "
         f"for user {user_id}"
     )
     
-    # Call RPC function for atomic delete with reassignment
+    # Call RPC function for atomic soft-delete with reassignment
     result = supabase_client.rpc(
         'delete_account_reassign',
         {
@@ -233,13 +235,13 @@ async def delete_account_with_reassignment(
     
     rpc_result = cast(Dict[str, Any], result.data[0])
     transaction_count = int(rpc_result.get('transactions_reassigned', 0))
-    account_deleted = bool(rpc_result.get('account_deleted', False))
+    account_soft_deleted = bool(rpc_result.get('account_soft_deleted', False))
     
-    if not account_deleted:
-        raise Exception(f"Account {account_id} was not deleted")
+    if not account_soft_deleted:
+        raise Exception(f"Account {account_id} was not soft-deleted")
     
     logger.info(
-        f"Account {account_id} deleted via RPC after reassigning "
+        f"Account {account_id} soft-deleted via RPC after reassigning "
         f"{transaction_count} transactions"
     )
     
@@ -250,23 +252,23 @@ async def delete_account_with_transactions(
     supabase_client: Client,
     user_id: str,
     account_id: str
-) -> int:
+) -> tuple[int, int]:
     """
-    Delete account by deleting all related transactions.
+    Soft-delete account along with all its transactions.
     
     Uses RPC function `delete_account_cascade` for atomic operation.
-    This implements DB delete rule Option 2:
-    1. Delete all transactions for this account
-    2. Handle paired transfers (clear paired_transaction_id)
-    3. Delete the account
+    This implements DB delete rule Option 2 with soft-delete strategy:
+    1. Soft-delete all recurring transaction templates
+    2. Soft-delete all transactions for this account
+    3. Soft-delete the account
     
     Args:
         supabase_client: Authenticated Supabase client
         user_id: The authenticated user's ID
-        account_id: The account UUID to delete
+        account_id: The account UUID to soft-delete
     
     Returns:
-        Number of transactions deleted
+        Tuple of (recurring_templates_soft_deleted, transactions_soft_deleted)
     
     Raises:
         Exception: If RPC call fails
@@ -274,12 +276,13 @@ async def delete_account_with_transactions(
     Security:
         - RPC validates account belongs to user_id
         - All operations happen atomically in DB
+        - All records are soft-deleted (deleted_at set), not physically removed
     """
     logger.info(
-        f"Deleting account {account_id} with all transactions for user {user_id}"
+        f"Soft-deleting account {account_id} with all transactions for user {user_id}"
     )
     
-    # Call RPC function for atomic delete with cascade
+    # Call RPC function for atomic soft-delete cascade
     result = supabase_client.rpc(
         'delete_account_cascade',
         {
@@ -292,16 +295,16 @@ async def delete_account_with_transactions(
         raise Exception("RPC delete_account_cascade failed: no data returned")
     
     rpc_result = cast(Dict[str, Any], result.data[0])
-    transaction_count = int(rpc_result.get('transactions_deleted', 0))
-    paired_refs_cleared = int(rpc_result.get('paired_references_cleared', 0))
-    account_deleted = bool(rpc_result.get('account_deleted', False))
+    recurring_count = int(rpc_result.get('recurring_templates_soft_deleted', 0))
+    transaction_count = int(rpc_result.get('transactions_soft_deleted', 0))
+    account_soft_deleted = bool(rpc_result.get('account_soft_deleted', False))
     
-    if not account_deleted:
-        raise Exception(f"Account {account_id} was not deleted")
+    if not account_soft_deleted:
+        raise Exception(f"Account {account_id} was not soft-deleted")
     
     logger.info(
-        f"Account {account_id} deleted via RPC after removing {transaction_count} "
-        f"transactions (cleared {paired_refs_cleared} paired references)"
+        f"Account {account_id} soft-deleted via RPC along with "
+        f"{recurring_count} recurring templates and {transaction_count} transactions"
     )
     
-    return transaction_count
+    return (recurring_count, transaction_count)

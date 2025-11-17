@@ -67,6 +67,19 @@ class AccountCreateRequest(BaseModel):
         max_length=3,
         examples=["GTQ", "USD", "EUR"]
     )
+    initial_balance: Optional[float] = Field(
+        None,
+        description="Optional initial balance for the account. "
+                    "If provided, creates an income transaction with system_generated_key='initial_balance'",
+        ge=0,
+        examples=[1000.00, 500.50, 0.00]
+    )
+    initial_balance_category_id: Optional[str] = Field(
+        None,
+        description="Category UUID for initial balance transaction. "
+                    "Required if initial_balance is provided",
+        examples=["uuid-of-category"]
+    )
 
 
 class AccountCreateResponse(BaseModel):
