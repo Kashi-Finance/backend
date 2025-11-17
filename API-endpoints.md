@@ -1636,9 +1636,15 @@ These map to the `budget` table and its join table to categories (`budget_catego
 ```
 
 **Response Fields:**
-- `categories`: Array of categories linked to this budget via `budget_category` table
- - `categories`: Array of full category records linked to this budget via `budget_category` table
-  - Each category returns every field from the `category` record as stored in the DB (for example: `id`, `user_id`, `key`, `name`, `flow_type`, `created_at`, `updated_at`, plus any additional fields). 
+- `categories`: Array of full category records linked to this budget via `budget_category` table
+  - **Each category includes ALL fields:**
+    - `id` (string, UUID) - Category UUID
+    - `user_id` (string or null) - Owner user UUID (null for system categories)
+    - `key` (string or null) - System category key (null for user-created categories)
+    - `name` (string) - Category display name
+    - `flow_type` (string) - "income" or "outcome"
+    - `created_at` (string) - ISO-8601 timestamp when created
+    - `updated_at` (string) - ISO-8601 timestamp of last update
   - Empty array if no categories linked
   - Categories can be system categories (with `key` field) or user-created (key is null)
 
@@ -1793,10 +1799,17 @@ These map to the `budget` table and its join table to categories (`budget_catego
 ```
 
 **Response Fields:**
-- `categories`: Array of categories linked to this budget via `budget_category` table
-  - Each category includes: `id`, `name`, `flow_type`, `key` (null for user categories)
+- `categories`: Array of full category records linked to this budget via `budget_category` table
+  - **Each category includes ALL fields:**
+    - `id` (string, UUID) - Category UUID
+    - `user_id` (string or null) - Owner user UUID (null for system categories)
+    - `key` (string or null) - System category key (null for user-created categories)
+    - `name` (string) - Category display name
+    - `flow_type` (string) - "income" or "outcome"
+    - `created_at` (string) - ISO-8601 timestamp when created
+    - `updated_at` (string) - ISO-8601 timestamp of last update
   - Empty array if no categories linked
-  - Categories can be system categories or user-created categories
+  - Categories can be system categories (with `key` field) or user-created (key is null)
 
 **Status Codes:**
 * `200 OK` - Budget retrieved successfully
@@ -1849,9 +1862,12 @@ These map to the `budget` table and its join table to categories (`budget_catego
     "categories": [
       {
         "id": "category-uuid-1",
+        "user_id": "user-uuid",
+        "key": null,
         "name": "Groceries",
         "flow_type": "outcome",
-        "key": null
+        "created_at": "2025-10-01T00:00:00Z",
+        "updated_at": "2025-10-01T00:00:00Z"
       }
     ],
     "created_at": "2025-11-03T10:15:00Z",
@@ -3533,3 +3549,69 @@ Budgets & suscriptions:
 Activity / financial history:
 * `/transactions` powers the activity feed and balance per account. Treat transactions with `paired_transaction_id` as transfers, not spending.
 * Account and budget endpoints now include `cached_balance` and `cached_consumption` for optimal performance.
+
+---
+
+## 11. Latest Updates (November 16, 2025)
+
+### Category Fields in Budget Responses
+
+**ENHANCEMENT: All budget endpoints now return complete category records**
+
+All budget endpoints (`GET /budgets`, `POST /budgets`, `GET /budgets/{budget_id}`, `PATCH /budgets/{budget_id}`) now return the COMPLETE category record for each category linked to the budget.
+
+**Full Category Fields Returned:**
+Each category in the `categories` array now includes:
+- `id` (string, UUID) - Category UUID
+- `user_id` (string or null) - Owner user UUID (null for system categories)
+- `key` (string or null) - System category key (null for user-created categories)
+- `name` (string) - Category display name
+- `flow_type` (string) - "income" or "outcome"
+- `created_at` (string) - ISO-8601 timestamp when created
+- `updated_at` (string) - ISO-8601 timestamp of last update
+
+**Example Category in Budget Response:**
+```json
+{
+  "id": "category-uuid-1",
+  "user_id": "user-uuid",
+  "key": null,
+  "name": "Groceries",
+  "flow_type": "outcome",
+  "created_at": "2025-10-01T00:00:00Z",
+  "updated_at": "2025-10-01T00:00:00Z"
+}
+```
+
+**System Categories (example with key):**
+```json
+{
+  "id": "system-category-uuid",
+  "user_id": null,
+  "key": "transfer",
+  "name": "Transfer",
+  "flow_type": "outcome",
+  "created_at": "2025-01-01T00:00:00Z",
+  "updated_at": "2025-01-01T00:00:00Z"
+}
+```
+
+**Benefits:**
+- Frontend has complete category context without separate requests
+- Distinguishes system categories (key != null) from user categories (key == null)
+- Shows category creation/modification timestamps
+- Enables better UI rendering with full category metadata
+
+**Updated Endpoints:**
+- `GET /budgets` - Returns all fields for each category
+- `POST /budgets` - Returns all fields for each created category
+- `GET /budgets/{budget_id}` - Returns all fields for single budget's categories
+- `PATCH /budgets/{budget_id}` - Returns all fields for updated budget's categories
+
+**Schema Changes:**
+- Updated `LinkedCategoryResponse` Pydantic model to include: `user_id`, `created_at`, `updated_at`
+- All category fields now explicitly documented with descriptions
+- Type safety maintained with proper null handling for system vs user categories
+
+---
+
