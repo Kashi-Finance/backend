@@ -15,7 +15,10 @@ from google.genai import types
 
 from backend.config import settings
 from backend.agents.invoice.types import InvoiceAgentOutput, CategorySuggestion
-from backend.agents.invoice.prompts import INVOICE_AGENT_SYSTEM_PROMPT
+from backend.agents.invoice.prompts import (
+    INVOICE_AGENT_SYSTEM_PROMPT,
+    build_invoice_agent_user_prompt
+)
 
 logger = logging.getLogger(__name__)
 
@@ -86,45 +89,13 @@ def run_invoice_agent(
         # Initialize Gemini client
         client = genai.Client(api_key=settings.GOOGLE_API_KEY)
         
-        # Serialize user categories for the prompt in a clear, LLM-friendly format
-        categories_list = []
-        for cat in user_categories:
-            cat_id = cat.get("id") or cat.get("category_id") 
-            cat_name = cat.get("name") or cat.get("category_name")
-            if cat_id and cat_name:
-                categories_list.append(f"- ID: {cat_id} | Name: {cat_name}")
-        
-        categories_text = "\n".join(categories_list) if categories_list else "(No categories available)"
-        
-        # Build the user prompt with dynamic context only
-        # (The system prompt already contains the full schema and extraction rules)
-        prompt_text = f"""Extract structured invoice data from this receipt image.
-
-**User Context:**
-- user_id: {user_id}
-- country: {country}
-- currency_preference: {currency_preference}
-
-**User's Existing Categories:**
-{categories_text}
-
-**Category Matching Rules (CRITICAL):**
-
-**If the invoice matches one of the user's existing categories:**
-  * Set match_type = "EXISTING"
-  * Set category_id = the exact ID from the list above
-  * Set category_name = the exact name from the list above
-  * Example: {{"match_type": "EXISTING", "category_id": "uuid-123", "category_name": "Supermercado"}}
-  
-**If NO existing category is a good match:**
-  * Set match_type = "NEW_PROPOSED"
-  * Set proposed_name = your suggested category name (e.g., "Restaurantes", "Farmacia", "Mascotas")
-  * Do NOT include category_id or category_name fields
-  * Example: {{"match_type": "NEW_PROPOSED", "proposed_name": "Mascotas"}}
-
-**IMPORTANT:** You MUST return the exact category_id AND category_name from the list above when using EXISTING. Do NOT invent IDs or names. 
-
-Return JSON matching the system prompt schema."""
+        # Build the user prompt with dynamic context
+        prompt_text = build_invoice_agent_user_prompt(
+            user_id=user_id,
+            user_categories=user_categories,
+            country=country,
+            currency_preference=currency_preference
+        )
         
         # Build multimodal content with image
         # Detect MIME type from base64 header or default to jpeg
@@ -159,7 +130,7 @@ Return JSON matching the system prompt schema."""
         logger.debug("Sending single-shot request to Gemini with complete context")
         response = client.models.generate_content(
             model="gemini-2.5-flash",
-            contents=[types.Content(role="user", parts=prompt_parts)],
+            contents=prompt_parts,  # type: ignore
             config=config
         )
         

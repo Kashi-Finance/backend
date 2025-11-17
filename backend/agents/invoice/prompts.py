@@ -1,11 +1,13 @@
 """
 InvoiceAgent System Prompts
 
-Contains the system prompt that instructs the Gemini model on how to behave as InvoiceAgent.
+Contains both the system prompt and user prompt template for InvoiceAgent.
 
 The InvoiceAgent is implemented as a single-shot multimodal workflow (not an ADK agent with tools).
 All required user context (user profile, currency preference, and user categories) is provided by the caller. The agent MUST NOT attempt to call external tools or services - it should rely solely on the provided prompt context and the attached image.
 """
+
+from typing import List, Dict
 
 
 INVOICE_AGENT_SYSTEM_PROMPT = """
@@ -109,3 +111,74 @@ SECURITY & DETERMINISM:
 - Use deterministic behavior for structured extraction (the backend will set generation parameters to be deterministic).
 - Do not emit sensitive user data beyond the fields required for the invoice draft.
 """
+
+
+def build_invoice_agent_user_prompt(
+    user_id: str,
+    user_categories: List[Dict],
+    country: str = "GT",
+    currency_preference: str = "GTQ"
+) -> str:
+    """
+    Build the user prompt for InvoiceAgent with complete context.
+    
+    This function generates the dynamic user prompt that includes:
+    - User context (user_id, country, currency_preference)
+    - User's existing expense categories for matching
+    - Clear category matching rules with examples
+    
+    Args:
+        user_id: Authenticated user UUID from Supabase Auth token
+        user_categories: List of user's expense categories from endpoint
+        country: User's country code (e.g., "GT")
+        currency_preference: User's preferred currency (e.g., "GTQ")
+        
+    Returns:
+        str: Formatted user prompt ready to be sent to Gemini with the receipt image
+        
+    Notes:
+        - This prompt is paired with INVOICE_AGENT_SYSTEM_PROMPT
+        - The system prompt contains schema definitions and general rules
+        - This user prompt contains dynamic context specific to the request
+    """
+    # Serialize user categories for the prompt in a clear, LLM-friendly format
+    categories_list = []
+    for cat in user_categories:
+        cat_id = cat.get("id") or cat.get("category_id") 
+        cat_name = cat.get("name") or cat.get("category_name")
+        if cat_id and cat_name:
+            categories_list.append(f"- ID: {cat_id} | Name: {cat_name}")
+    
+    categories_text = "\n".join(categories_list) if categories_list else "(No categories available)"
+    
+    # Build the user prompt with dynamic context only
+    # (The system prompt already contains the full schema and extraction rules)
+    prompt_text = f"""Extract structured invoice data from this receipt image.
+
+**User Context:**
+- user_id: {user_id}
+- country: {country}
+- currency_preference: {currency_preference}
+
+**User's Existing Categories:**
+{categories_text}
+
+**Category Matching Rules (CRITICAL):**
+
+**If the invoice matches one of the user's existing categories:**
+  * Set match_type = "EXISTING"
+  * Set category_id = the exact ID from the list above
+  * Set category_name = the exact name from the list above
+  * Example: {{"match_type": "EXISTING", "category_id": "uuid-123", "category_name": "Supermercado"}}
+  
+**If NO existing category is a good match:**
+  * Set match_type = "NEW_PROPOSED"
+  * Set proposed_name = your suggested category name (e.g., "Restaurantes", "Farmacia", "Mascotas")
+  * Do NOT include category_id or category_name fields
+  * Example: {{"match_type": "NEW_PROPOSED", "proposed_name": "Mascotas"}}
+
+**IMPORTANT:** You MUST return the exact category_id AND category_name from the list above when using EXISTING. Do NOT invent IDs or names. 
+
+Return JSON matching the system prompt schema."""
+    
+    return prompt_text
