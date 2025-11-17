@@ -273,10 +273,10 @@ async def create_wishlist(
         if not result.data or len(result.data) == 0:
             raise Exception("Failed to create wishlist: no data returned")
         
-        created_wishlist: Dict[str, Any] = cast(Dict[str, Any], result.data[0])
-        logger.info(f"Wishlist created successfully: {created_wishlist['id']}")
+        simple_created_wishlist: Dict[str, Any] = cast(Dict[str, Any], result.data[0])
+        logger.info(f"Wishlist created successfully: {simple_created_wishlist['id']}")
         
-        return created_wishlist, 0
+        return simple_created_wishlist, 0
 
 
 async def update_wishlist(
