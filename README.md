@@ -65,3 +65,12 @@ Abre PR → develop.
 develop se usa como staging (deploy automático).
 Cuando ya está probado en staging, se abre PR de develop → main.
 main dispara el pipeline de prod.
+
+
+**Deployment Command:**
+```bash
+gcloud run deploy kashi-backend-staging \
+  --source . \
+  --region=us-central1 \
+  --allow-unauthenticated
+```
