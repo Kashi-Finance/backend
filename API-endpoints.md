@@ -437,7 +437,8 @@ Money lives in accounts. Spending is labeled with categories.
 {
   "name": "Main Checking",
   "type": "bank",
-  "currency": "GTQ"
+  "currency": "GTQ",
+  "initial_balance": 1500.00
 }
 ```
 
@@ -446,10 +447,18 @@ Money lives in accounts. Spending is labeled with categories.
 - `type` (AccountType enum): One of the account types listed above
 - `currency` (string, min_length=3, max_length=3): ISO currency code (e.g., "GTQ", "USD")
 
+**Optional Fields:**
+- `initial_balance` (float, >=0): Opening balance for the account
+  - If provided, automatically creates an income transaction with the system category `key='initial_balance'` and `flow_type='income'`
+  - The transaction is marked with `system_generated_key='initial_balance'`
+  - No need to provide a category_id - the system handles this automatically
+  - The account's `cached_balance` will reflect this initial balance in the response
+
 **Behavior:**
 - Creates a new account owned by the authenticated user
 - `user_id` is set from auth token (client cannot override)
 - Account starts with `cached_balance` of 0 (or initial balance if provided)
+- If `initial_balance` is provided, a transaction is automatically created using the system category
 - Cached balance can be recomputed via `recompute_account_balance` RPC if needed
 - All fields are validated by Pydantic before persistence
 
@@ -463,7 +472,7 @@ Money lives in accounts. Spending is labeled with categories.
     "name": "Main Checking",
     "type": "bank",
     "currency": "GTQ",
-    "cached_balance": 0.0,
+    "cached_balance": 1500.00,
     "created_at": "2025-11-05T10:00:00Z",
     "updated_at": "2025-11-05T10:00:00Z"
   },
@@ -476,7 +485,7 @@ Money lives in accounts. Spending is labeled with categories.
 - `400 BAD REQUEST` - Invalid request data
 - `401 UNAUTHORIZED` - Missing or invalid authentication token
 - `422 UNPROCESSABLE ENTITY` - Validation error (invalid type, currency, etc.)
-- `500 INTERNAL SERVER ERROR` - Database error
+- `500 INTERNAL SERVER ERROR` - Database error or missing system category
 
 **Security:**
 - RLS automatically sets `user_id = auth.uid()` on insert
@@ -701,12 +710,14 @@ Examples:
 - Used by: invoice flow (category dropdown), manual transaction entry, budgets
 
 **System Categories (read-only, user_id=NULL):**
-- `initial_balance` — Opening balance seeding an account
-- `balance_update_income` — Manual positive adjustment
-- `balance_update_outcome` — Manual negative adjustment
-- `from_recurrent_transaction` — Money auto-logged from recurring schedule
-- `transfer` — Assigned when transaction is used as transfer part
-- `general` — For no-assigned category transactions (default fallback)
+- `initial_balance` (income) — Opening balance when creating an account (automatically assigned)
+- `initial_balance` (outcome) — Opening balance for liability accounts (automatically assigned)
+- `balance_update` (income) — Manual positive adjustment
+- `balance_update` (outcome) — Manual negative adjustment
+- `transfer` (income) — Receiving side of internal transfers (automatically assigned)
+- `transfer` (outcome) — Sending side of internal transfers (automatically assigned)
+- `general` (income) — Default fallback for uncategorized income
+- `general` (outcome) — Default fallback for uncategorized expenses
 
 **Response:**
 ```json

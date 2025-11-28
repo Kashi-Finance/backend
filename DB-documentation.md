@@ -52,6 +52,8 @@ System categories are **global, immutable categories** (where `user_id IS NULL` 
 - System categories are **never** used to indicate "this transaction was auto-generated"
 - Auto-generated transactions (from recurring rules, invoice OCR, etc.) use the `transaction.system_generated_key` field for metadata
 - Categories must always represent **user-intended categorization**
+- When creating an account with `initial_balance`, the API automatically selects the system category with `key='initial_balance'` and `flow_type='income'` (or `outcome` for liability accounts)
+- Users do not need to know the category ID - the system handles category selection for special operations like initial balance and transfers
 
 ---
 
