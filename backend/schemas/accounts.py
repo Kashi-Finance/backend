@@ -28,14 +28,17 @@ class AccountResponse(BaseModel):
     """
     Response for account details.
     
-    Contains all account fields. Balance is computed from transactions,
-    not stored directly.
+    Contains all account fields including cached balance.
     """
     id: str = Field(..., description="Account UUID")
     user_id: str = Field(..., description="Owner user UUID (from auth.users)")
     name: str = Field(..., description="Human-readable account name")
     type: AccountType = Field(..., description="Kind of financial container")
     currency: str = Field(..., description="ISO currency code (e.g. 'GTQ')")
+    cached_balance: float = Field(
+        ..., 
+        description="Cached account balance (performance cache, recomputable via recompute_account_balance RPC)"
+    )
     created_at: str = Field(..., description="ISO-8601 timestamp when created")
     updated_at: str = Field(..., description="ISO-8601 timestamp of last update")
 
@@ -70,15 +73,10 @@ class AccountCreateRequest(BaseModel):
     initial_balance: Optional[float] = Field(
         None,
         description="Optional initial balance for the account. "
-                    "If provided, creates an income transaction with system_generated_key='initial_balance'",
+                    "If provided, creates an income transaction with system_generated_key='initial_balance' "
+                    "using the system category with key='initial_balance' and flow_type='income'",
         ge=0,
         examples=[1000.00, 500.50, 0.00]
-    )
-    initial_balance_category_id: Optional[str] = Field(
-        None,
-        description="Category UUID for initial balance transaction. "
-                    "Required if initial_balance is provided",
-        examples=["uuid-of-category"]
     )
 
 

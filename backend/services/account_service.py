@@ -308,3 +308,71 @@ async def delete_account_with_transactions(
     )
     
     return (recurring_count, transaction_count)
+
+
+async def recompute_account_balance(
+    supabase_client: Client,
+    user_id: str,
+    account_id: str
+) -> float:
+    """
+    Recompute account cached_balance from transaction history.
+    
+    This function calls the `recompute_account_balance` RPC which:
+    1. Validates account belongs to user
+    2. Sums all non-deleted transactions (income positive, outcome negative)
+    3. Updates account.cached_balance
+    4. Returns the new balance
+    
+    Call this after:
+    - Creating transactions
+    - Updating transactions (amount/account/flow_type changed)
+    - Deleting transactions
+    - Restoring soft-deleted transactions
+    
+    Args:
+        supabase_client: Authenticated Supabase client
+        user_id: The authenticated user's ID
+        account_id: The account UUID to recompute
+    
+    Returns:
+        The new computed balance
+    
+    Raises:
+        Exception: If RPC call fails or account not found
+    
+    Security:
+        - RPC validates account belongs to user_id
+        - RLS is bypassed by SECURITY DEFINER but ownership is verified
+    """
+    logger.debug(f"Recomputing balance for account {account_id}, user {user_id}")
+    
+    try:
+        result = supabase_client.rpc(
+            'recompute_account_balance',
+            {
+                'p_account_id': account_id,
+                'p_user_id': user_id
+            }
+        ).execute()
+        
+        if result.data is None:
+            raise Exception("RPC recompute_account_balance returned None")
+        
+        # RPC returns a single numeric value
+        # Cast to appropriate type - it could be int or float
+        balance_value = result.data
+        if isinstance(balance_value, (int, float)):
+            new_balance = float(balance_value)
+        elif isinstance(balance_value, str):
+            new_balance = float(balance_value)
+        else:
+            raise Exception(f"Unexpected balance type: {type(balance_value)}")
+        
+        logger.info(f"Account {account_id} balance recomputed: {new_balance}")
+        
+        return new_balance
+        
+    except Exception as e:
+        logger.error(f"Failed to recompute balance for account {account_id}: {e}")
+        raise
