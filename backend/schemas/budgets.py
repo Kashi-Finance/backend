@@ -18,11 +18,15 @@ BudgetFrequency = Literal["once", "daily", "weekly", "monthly", "yearly"]
 class LinkedCategoryResponse(BaseModel):
     """
     Represents a category linked to a budget via budget_category junction table.
+    Returns all fields from the category record for complete context.
     """
     id: str = Field(..., description="Category UUID")
+    user_id: Optional[str] = Field(None, description="Owner user UUID (null for system categories)")
+    key: Optional[str] = Field(None, description="System category key (null for user categories)")
     name: str = Field(..., description="Category display name")
     flow_type: Literal["income", "outcome"] = Field(..., description="Money direction")
-    key: Optional[str] = Field(None, description="System category key (null for user categories)")
+    created_at: str = Field(..., description="ISO-8601 timestamp when created")
+    updated_at: str = Field(..., description="ISO-8601 timestamp of last update")
 
 
 class BudgetResponse(BaseModel):
@@ -41,6 +45,10 @@ class BudgetResponse(BaseModel):
     start_date: str = Field(..., description="When this budget starts counting (ISO-8601 date)")
     end_date: Optional[str] = Field(None, description="Hard stop date for one-time/project budgets (ISO-8601 date)")
     is_active: bool = Field(..., description="Whether the budget is currently in effect")
+    cached_consumption: float = Field(
+        ..., 
+        description="Cached budget consumption (performance cache, recomputable via recompute_budget_consumption RPC)"
+    )
     categories: List[LinkedCategoryResponse] = Field(
         default_factory=list,
         description="List of categories linked to this budget via budget_category table"
