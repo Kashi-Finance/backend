@@ -132,6 +132,7 @@ async def list_budgets(
                 start_date=_as_str(b.get("start_date")),
                 end_date=_as_str(b.get("end_date")) if b.get("end_date") else None,
                 is_active=_as_bool(b.get("is_active")),
+                cached_consumption=_as_float(b.get("cached_consumption")),
                 categories=b.get("categories", []),  # Categories already transformed in service layer
                 created_at=_as_str(b.get("created_at")),
                 updated_at=_as_str(b.get("updated_at"))
@@ -250,6 +251,7 @@ async def create_new_budget(
             start_date=_as_str(created_budget.get("start_date")),
             end_date=_as_str(created_budget.get("end_date")) if created_budget.get("end_date") else None,
             is_active=_as_bool(created_budget.get("is_active")),
+            cached_consumption=_as_float(created_budget.get("cached_consumption")),
             categories=created_budget.get("categories", []),  # Categories from service layer
             created_at=_as_str(created_budget.get("created_at")),
             updated_at=_as_str(created_budget.get("updated_at"))
@@ -346,6 +348,7 @@ async def get_budget(
             start_date=_as_str(budget.get("start_date")),
             end_date=_as_str(budget.get("end_date")) if budget.get("end_date") else None,
             is_active=_as_bool(budget.get("is_active")),
+            cached_consumption=_as_float(budget.get("cached_consumption")),
             categories=budget.get("categories", []),  # Categories from service layer
             created_at=_as_str(budget.get("created_at")),
             updated_at=_as_str(budget.get("updated_at"))
@@ -450,6 +453,7 @@ async def update_existing_budget(
             start_date=_as_str(updated_budget.get("start_date")),
             end_date=_as_str(updated_budget.get("end_date")) if updated_budget.get("end_date") else None,
             is_active=_as_bool(updated_budget.get("is_active")),
+            cached_consumption=_as_float(updated_budget.get("cached_consumption")),
             categories=updated_budget.get("categories", []),  # Categories from service layer
             created_at=_as_str(updated_budget.get("created_at")),
             updated_at=_as_str(updated_budget.get("updated_at"))

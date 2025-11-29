@@ -106,6 +106,7 @@ async def list_accounts(
                 name=_as_str(acc.get("name")),
                 type=acc.get("type", "cash"),  # type: ignore
                 currency=_as_str(acc.get("currency")),
+                cached_balance=float(acc.get("cached_balance", 0)),
                 created_at=_as_str(acc.get("created_at")),
                 updated_at=_as_str(acc.get("updated_at")),
             )
@@ -181,22 +182,11 @@ async def create_new_account(
     
     supabase_client = get_supabase_client(auth_user.access_token)
     
-    # Validate initial balance requirements
-    if request.initial_balance is not None and request.initial_balance > 0:
-        if not request.initial_balance_category_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": "invalid_request",
-                    "details": "initial_balance_category_id is required when initial_balance is provided"
-                }
-            )
-    
     try:
         # Import transaction service for initial balance
         from backend.services.transaction_service import create_transaction
         from backend.utils.constants import SYSTEM_GENERATED_KEYS
-        from datetime import datetime
+        from datetime import datetime, timezone
         
         created_account = await create_account(
             supabase_client=supabase_client,
@@ -215,19 +205,67 @@ async def create_new_account(
                 f"account={account_id}, amount={request.initial_balance}"
             )
             
+            # Fetch system category with key="initial_balance" and flow_type="income"
+            # This is a system category (user_id=NULL) used for opening account balances
+            category_response = supabase_client.from_("category").select("id").eq(
+                "key", "initial_balance"
+            ).eq(
+                "flow_type", "income"
+            ).is_(
+                "user_id", "null"
+            ).execute()
+            
+            if not category_response.data or len(category_response.data) == 0:
+                logger.error("System category 'initial_balance' with flow_type='income' not found")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail={
+                        "error": "system_category_missing",
+                        "details": "Required system category for initial balance not found. Please contact support."
+                    }
+                )
+            
+            category_dict = category_response.data[0]
+            if not isinstance(category_dict, dict):
+                logger.error(f"Unexpected category data type: {type(category_dict)}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail={
+                        "error": "system_error",
+                        "details": "Invalid system category data structure"
+                    }
+                )
+            
+            initial_balance_category_id = str(category_dict.get("id"))
+            logger.debug(f"Using system category for initial balance: {initial_balance_category_id}")
+            
             await create_transaction(
                 supabase_client=supabase_client,
                 user_id=auth_user.user_id,
                 account_id=str(account_id),
-                category_id=request.initial_balance_category_id,  # type: ignore
+                category_id=initial_balance_category_id,
                 flow_type="income",  # Initial balance is income
                 amount=request.initial_balance,
-                date=datetime.utcnow().isoformat(),
+                date=datetime.now(timezone.utc).isoformat(),
                 description="Initial balance",
                 system_generated_key=SYSTEM_GENERATED_KEYS['INITIAL_BALANCE']
             )
             
             logger.info(f"Initial balance transaction created for account {account_id}")
+            
+            # CRITICAL FIX: Re-fetch account to get updated cached_balance
+            # The create_transaction service now calls recompute_account_balance(),
+            # but created_account dict is stale. We must fetch the fresh data.
+            from backend.services.account_service import get_account_by_id
+            updated_account = await get_account_by_id(
+                supabase_client=supabase_client,
+                user_id=auth_user.user_id,
+                account_id=str(account_id)
+            )
+            
+            if updated_account:
+                created_account = updated_account
+                logger.debug(f"Account re-fetched after initial balance: cached_balance={created_account.get('cached_balance')}")
         
         # Helper to coerce DB values to strings
         def _as_str(v: Any) -> str:
@@ -239,6 +277,7 @@ async def create_new_account(
             name=_as_str(created_account.get("name")),
             type=created_account.get("type", "cash"),  # type: ignore
             currency=_as_str(created_account.get("currency")),
+            cached_balance=float(created_account.get("cached_balance", 0)),
             created_at=_as_str(created_account.get("created_at")),
             updated_at=_as_str(created_account.get("updated_at")),
         )
@@ -314,6 +353,7 @@ async def get_account(
             name=_as_str(account.get("name")),
             type=account.get("type", "cash"),  # type: ignore
             currency=_as_str(account.get("currency")),
+            cached_balance=float(account.get("cached_balance", 0)),
             created_at=_as_str(account.get("created_at")),
             updated_at=_as_str(account.get("updated_at")),
         )
@@ -398,6 +438,7 @@ async def update_existing_account(
             name=_as_str(updated_account.get("name")),
             type=updated_account.get("type", "cash"),  # type: ignore
             currency=_as_str(updated_account.get("currency")),
+            cached_balance=float(updated_account.get("cached_balance", 0)),
             created_at=_as_str(updated_account.get("created_at")),
             updated_at=_as_str(updated_account.get("updated_at")),
         )
