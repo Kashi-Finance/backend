@@ -20,13 +20,15 @@ async def create_transfer(
     to_account_id: str,
     amount: float,
     date: str,
-    description: Optional[str] = None,
-    transfer_category_id: Optional[str] = None
+    description: Optional[str] = None
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Create a one-time internal transfer between two accounts.
     
     Uses RPC function `create_transfer` for atomic paired transaction creation.
+    The RPC automatically assigns the correct 'transfer' category based on flow_type:
+    - Outgoing transaction (outcome): Uses 'transfer' + 'outcome' category
+    - Incoming transaction (income): Uses 'transfer' + 'income' category
     
     Args:
         supabase_client: Authenticated Supabase client
@@ -36,7 +38,6 @@ async def create_transfer(
         amount: Amount to transfer (must be > 0)
         date: Transfer date (ISO-8601 format)
         description: Optional description for both transactions
-        transfer_category_id: UUID of 'transfer' system category (fetched if not provided)
         
     Returns:
         Tuple of (outgoing_transaction, incoming_transaction) dicts
@@ -48,27 +49,15 @@ async def create_transfer(
     Security:
         - RPC validates both accounts belong to user_id
         - All operations happen atomically in DB
+        - Categories are flow-aware: same key='transfer', different flow_type
     """
     logger.info(
         f"Creating transfer for user {user_id}: "
         f"{amount} from {from_account_id} to {to_account_id}"
     )
     
-    # Fetch 'transfer' system category if not provided
-    if transfer_category_id is None:
-        category_result = (
-            supabase_client.table("category")
-            .select("id")
-            .eq("key", "transfer")
-            .execute()
-        )
-        
-        if not category_result.data or len(category_result.data) == 0:
-            raise ValueError("System category 'transfer' not found")
-        
-        transfer_category_id = category_result.data[0]["id"]
-    
     # Call RPC function for atomic transfer creation
+    # RPC handles category selection internally (flow-aware)
     result = supabase_client.rpc(
         'create_transfer',
         {
@@ -77,8 +66,7 @@ async def create_transfer(
             'p_to_account_id': to_account_id,
             'p_amount': amount,
             'p_date': date,
-            'p_description': description,
-            'p_transfer_category_id': transfer_category_id
+            'p_description': description
         }
     ).execute()
     
@@ -113,6 +101,16 @@ async def create_transfer(
     logger.info(
         f"Transfer created via RPC: {outgoing_id} (out) <-> {incoming_id} (in)"
     )
+    
+    # Recompute balances for both accounts after transfer
+    try:
+        from backend.services.account_service import recompute_account_balance
+        await recompute_account_balance(supabase_client, user_id, from_account_id)
+        await recompute_account_balance(supabase_client, user_id, to_account_id)
+        logger.debug(f"Account balances recomputed for both accounts after transfer creation")
+    except Exception as e:
+        logger.warning(f"Failed to recompute account balances after transfer creation: {e}")
+        # Don't fail the transfer creation, just log the warning
     
     return (outgoing_transaction, incoming_transaction)
 
@@ -204,6 +202,22 @@ async def update_transfer(
         f"Transfer updated via RPC: {updated_id} <-> {paired_id}"
     )
     
+    # Recompute balances for both accounts after transfer update
+    try:
+        from backend.services.account_service import recompute_account_balance
+        from_account = updated_transaction.get("account_id")
+        to_account = paired_transaction.get("account_id")
+        
+        if from_account:
+            await recompute_account_balance(supabase_client, user_id, from_account)
+        if to_account:
+            await recompute_account_balance(supabase_client, user_id, to_account)
+            
+        logger.debug(f"Account balances recomputed for both accounts after transfer update")
+    except Exception as e:
+        logger.warning(f"Failed to recompute account balances after transfer update: {e}")
+        # Don't fail the transfer update, just log the warning
+    
     return (updated_transaction, paired_transaction)
 
 
@@ -234,6 +248,32 @@ async def delete_transfer(
     """
     logger.info(f"Deleting transfer for user {user_id}: transaction {transaction_id}")
     
+    # Fetch the transaction and its pair BEFORE deletion to get account IDs
+    transaction_result = (
+        supabase_client.table("transaction")
+        .select("account_id, paired_transaction_id")
+        .eq("id", transaction_id)
+        .execute()
+    )
+    
+    if not transaction_result.data or len(transaction_result.data) == 0:
+        raise ValueError(f"Transaction {transaction_id} not found")
+    
+    transaction = transaction_result.data[0]
+    account_1 = transaction.get("account_id")
+    paired_id_for_lookup = transaction.get("paired_transaction_id")
+    
+    account_2 = None
+    if paired_id_for_lookup:
+        paired_result = (
+            supabase_client.table("transaction")
+            .select("account_id")
+            .eq("id", paired_id_for_lookup)
+            .execute()
+        )
+        if paired_result.data and len(paired_result.data) > 0:
+            account_2 = paired_result.data[0].get("account_id")
+    
     # Call RPC function for atomic transfer deletion
     result = supabase_client.rpc(
         'delete_transfer',
@@ -251,6 +291,18 @@ async def delete_transfer(
     paired_id = rpc_result['paired_transaction_id']
     
     logger.info(f"Transfer deleted via RPC: {deleted_id} and {paired_id}")
+    
+    # Recompute balances for both accounts after transfer deletion
+    try:
+        from backend.services.account_service import recompute_account_balance
+        if account_1:
+            await recompute_account_balance(supabase_client, user_id, account_1)
+        if account_2:
+            await recompute_account_balance(supabase_client, user_id, account_2)
+        logger.debug(f"Account balances recomputed for both accounts after transfer deletion")
+    except Exception as e:
+        logger.warning(f"Failed to recompute account balances after transfer deletion: {e}")
+        # Don't fail the deletion, just log the warning
     
     return (deleted_id, paired_id)
 
@@ -271,13 +323,15 @@ async def create_recurring_transfer(
     by_weekday: Optional[List[str]] = None,
     by_monthday: Optional[List[int]] = None,
     end_date: Optional[str] = None,
-    is_active: bool = True,
-    transfer_category_id: Optional[str] = None
+    is_active: bool = True
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Create a recurring internal transfer.
     
     Uses RPC function `create_recurring_transfer` for atomic paired rule creation.
+    The RPC automatically assigns the correct 'transfer' category based on flow_type:
+    - Outgoing rule (outcome): Uses 'transfer' + 'outcome' category
+    - Incoming rule (income): Uses 'transfer' + 'income' category
     
     Args:
         supabase_client: Authenticated Supabase client
@@ -294,7 +348,6 @@ async def create_recurring_transfer(
         by_monthday: Month days for monthly frequency (optional)
         end_date: End date or NULL (optional)
         is_active: Whether rules are active (default True)
-        transfer_category_id: UUID of 'from_recurrent_transaction' system category
         
     Returns:
         Tuple of (outgoing_rule, incoming_rule) dicts
@@ -306,27 +359,15 @@ async def create_recurring_transfer(
     Security:
         - RPC validates both accounts belong to user_id
         - All operations happen atomically in DB
+        - Categories are flow-aware: same key='transfer', different flow_type
     """
     logger.info(
         f"Creating recurring transfer for user {user_id}: "
         f"{amount} from {from_account_id} to {to_account_id}, {frequency}"
     )
     
-    # Fetch 'from_recurrent_transaction' system category
-    if transfer_category_id is None:
-        category_result = (
-            supabase_client.table("category")
-            .select("id")
-            .eq("key", "from_recurrent_transaction")
-            .execute()
-        )
-        
-        if not category_result.data or len(category_result.data) == 0:
-            raise ValueError("System category 'from_recurrent_transaction' not found")
-        
-        transfer_category_id = category_result.data[0]["id"]
-    
     # Call RPC function for atomic recurring transfer creation
+    # RPC handles category selection internally (flow-aware)
     result = supabase_client.rpc(
         'create_recurring_transfer',
         {
@@ -342,8 +383,7 @@ async def create_recurring_transfer(
             'p_by_weekday': by_weekday,
             'p_by_monthday': by_monthday,
             'p_end_date': end_date,
-            'p_is_active': is_active,
-            'p_transfer_category_id': transfer_category_id
+            'p_is_active': is_active
         }
     ).execute()
     
