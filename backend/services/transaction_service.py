@@ -97,6 +97,16 @@ async def create_transaction(
         f"user_id={user_id}"
     )
 
+    # Recompute account balance after creating transaction
+    try:
+        from backend.services.account_service import recompute_account_balance
+        await recompute_account_balance(supabase_client, user_id, account_id)
+        logger.debug(f"Account balance recomputed for account {account_id} after transaction creation")
+    except Exception as e:
+        logger.warning(f"Failed to recompute account balance after transaction creation: {e}")
+        # Don't fail the transaction creation, just log the warning
+        # The balance can be recomputed later if needed
+
     # TODO(db-team): generate and save embedding for transaction.embedding field using text-embedding-3-small
     # The embedding should be generated from:
     # 1. If invoice_id is not NULL: fetch invoice.extracted_text and combine with transaction data
@@ -321,6 +331,34 @@ async def update_transaction(
 
     logger.info(f"Transaction {transaction_id} updated successfully for user {user_id}")
 
+    # Recompute account balance if amount, account, or flow_type changed
+    should_recompute = (
+        amount is not None or
+        account_id is not None or
+        flow_type is not None
+    )
+    
+    if should_recompute:
+        try:
+            from backend.services.account_service import recompute_account_balance
+            
+            # Recompute balance for current account
+            current_account = updated_transaction.get("account_id")
+            if current_account:
+                await recompute_account_balance(supabase_client, user_id, current_account)
+                logger.debug(f"Account balance recomputed for account {current_account} after update")
+            
+            # If account changed, also recompute old account balance
+            if account_id is not None and existing.get("account_id") != account_id:
+                old_account = existing.get("account_id")
+                if old_account:
+                    await recompute_account_balance(supabase_client, user_id, old_account)
+                    logger.debug(f"Account balance recomputed for old account {old_account} after transfer")
+                    
+        except Exception as e:
+            logger.warning(f"Failed to recompute account balance after transaction update: {e}")
+            # Don't fail the update, just log the warning
+
     # TODO(db-team): regenerate and save embedding for transaction.embedding field using text-embedding-3-small
     # The embedding should be regenerated if description, amount, category, or date changed
     # Generation strategy:
@@ -411,4 +449,16 @@ async def delete_transaction(
         return False
 
     logger.info(f"Transaction {transaction_id} deleted successfully for user {user_id}")
+    
+    # Recompute account balance after deletion
+    try:
+        from backend.services.account_service import recompute_account_balance
+        account_id_for_recompute = existing.get("account_id")
+        if account_id_for_recompute:
+            await recompute_account_balance(supabase_client, user_id, account_id_for_recompute)
+            logger.debug(f"Account balance recomputed for account {account_id_for_recompute} after deletion")
+    except Exception as e:
+        logger.warning(f"Failed to recompute account balance after transaction deletion: {e}")
+        # Don't fail the deletion, just log the warning
+    
     return True
