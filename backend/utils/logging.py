@@ -13,7 +13,7 @@ CRITICAL SECURITY RULES:
 Acceptable logging:
 - High-level events (e.g., "InvoiceAgent invoked", "OCR completed")
 - Non-sensitive metadata (e.g., "store_name='SuperMercado XYZ'")
-- Agent orchestration flow (e.g., "RecommendationCoordinatorAgent → SearchAgent")
+- AI component execution flow (e.g., "Recommendation query processed")
 - Error codes and sanitized error messages (no stack traces with secrets)
 """
 
