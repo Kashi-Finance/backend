@@ -46,6 +46,11 @@ def mock_account():
         "name": "Test Checking Account",
         "type": "bank",
         "currency": "GTQ",
+        "icon": "bank",
+        "color": "#4CAF50",
+        "is_favorite": False,
+        "is_pinned": False,
+        "description": None,
         "created_at": "2025-11-05T10:00:00Z",
         "updated_at": "2025-11-05T10:00:00Z"
     }
@@ -107,7 +112,9 @@ class TestCreateAccount:
             json={
                 "name": "Test Checking Account",
                 "type": "bank",
-                "currency": "GTQ"
+                "currency": "GTQ",
+                "icon": "bank",
+                "color": "#4CAF50"
             }
         )
         
@@ -116,6 +123,8 @@ class TestCreateAccount:
         assert data["status"] == "CREATED"
         assert data["account"]["id"] == mock_account["id"]
         assert data["account"]["name"] == mock_account["name"]
+        assert data["account"]["icon"] == mock_account["icon"]
+        assert data["account"]["color"] == mock_account["color"]
         assert data["message"] == "Account created successfully"
     
     def test_create_account_invalid_type(self, mock_auth, mock_get_supabase_client):
@@ -125,7 +134,9 @@ class TestCreateAccount:
             json={
                 "name": "Test Account",
                 "type": "invalid_type",  # Not in enum
-                "currency": "GTQ"
+                "currency": "GTQ",
+                "icon": "bank",
+                "color": "#4CAF50"
             }
         )
         
@@ -273,3 +284,167 @@ class TestDeleteAccount:
         data = response.json()
         assert data["detail"]["error"] == "invalid_request"
         assert "target_account_id is required" in data["detail"]["details"]
+
+
+class TestFavoriteAccount:
+    """Tests for favorite account endpoints."""
+    
+    def test_get_favorite_account_success(self, mock_auth, mock_get_supabase_client, mock_account):
+        """Test getting favorite account when one exists."""
+        # Must patch where the function is USED (routes module), not where it's DEFINED (service module)
+        with patch("backend.routes.accounts.get_favorite_account") as mock_get_favorite:
+            async def mock_return(*args, **kwargs):
+                return mock_account["id"]
+            mock_get_favorite.side_effect = mock_return
+            
+            response = client.get("/accounts/favorite")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "OK"
+            assert data["favorite_account_id"] == mock_account["id"]
+    
+    def test_get_favorite_account_not_found(self, mock_auth, mock_get_supabase_client):
+        """Test getting favorite account when none exists."""
+        with patch("backend.routes.accounts.get_favorite_account") as mock_get_favorite:
+            async def mock_return(*args, **kwargs):
+                return None
+            mock_get_favorite.side_effect = mock_return
+            
+            response = client.get("/accounts/favorite")
+            
+            # Should return 200 with null favorite_account_id
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "OK"
+            assert data["favorite_account_id"] is None
+    
+    def test_set_favorite_account_success(self, mock_auth, mock_get_supabase_client, mock_account):
+        """Test setting an account as favorite."""
+        with patch("backend.routes.accounts.set_favorite_account") as mock_set_favorite:
+            async def mock_return(*args, **kwargs):
+                return {
+                    "previous_favorite_id": None,
+                    "new_favorite_id": mock_account["id"],
+                    "success": True
+                }
+            mock_set_favorite.side_effect = mock_return
+            
+            response = client.post(
+                "/accounts/favorite",
+                json={"account_id": mock_account["id"]}
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "OK"
+            assert data["new_favorite_id"] == mock_account["id"]
+    
+    def test_clear_favorite_account_success(self, mock_auth, mock_get_supabase_client, mock_account):
+        """Test clearing favorite status from an account."""
+        with patch("backend.routes.accounts.clear_favorite_account") as mock_clear_favorite:
+            async def mock_return(*args, **kwargs):
+                return True  # was_cleared
+            mock_clear_favorite.side_effect = mock_return
+            
+            response = client.delete(f"/accounts/favorite/{mock_account['id']}")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "OK"
+            assert data["cleared"] is True
+    
+    def test_set_favorite_account_not_found(self, mock_auth, mock_get_supabase_client):
+        """Test setting favorite on non-existent account."""
+        with patch("backend.routes.accounts.set_favorite_account") as mock_set_favorite:
+            async def mock_return(*args, **kwargs):
+                raise Exception("Account not found")
+            mock_set_favorite.side_effect = mock_return
+            
+            response = client.post(
+                "/accounts/favorite",
+                json={"account_id": "nonexistent-id"}
+            )
+            
+            assert response.status_code == 404
+            data = response.json()
+            assert data["detail"]["error"] == "not_found"
+
+
+class TestAccountFieldValidation:
+    """Tests for new account field validation."""
+    
+    def test_create_account_invalid_color_format(self, mock_auth, mock_get_supabase_client):
+        """Test account creation with invalid color format."""
+        response = client.post(
+            "/accounts",
+            json={
+                "name": "Test Account",
+                "type": "bank",
+                "currency": "GTQ",
+                "icon": "bank",
+                "color": "not-a-hex-color"  # Invalid format
+            }
+        )
+        
+        assert response.status_code == 422  # Validation error
+    
+    def test_create_account_missing_icon(self, mock_auth, mock_get_supabase_client):
+        """Test account creation without required icon field."""
+        response = client.post(
+            "/accounts",
+            json={
+                "name": "Test Account",
+                "type": "bank",
+                "currency": "GTQ",
+                "color": "#4CAF50"
+                # Missing icon
+            }
+        )
+        
+        assert response.status_code == 422  # Validation error
+    
+    def test_create_account_missing_color(self, mock_auth, mock_get_supabase_client):
+        """Test account creation without required color field."""
+        response = client.post(
+            "/accounts",
+            json={
+                "name": "Test Account",
+                "type": "bank",
+                "currency": "GTQ",
+                "icon": "bank"
+                # Missing color
+            }
+        )
+        
+        assert response.status_code == 422  # Validation error
+    
+    @patch("backend.routes.accounts.update_account")
+    def test_update_account_with_new_fields(self, mock_update, mock_auth, mock_get_supabase_client, mock_account):
+        """Test updating account with new fields."""
+        updated_account = {
+            **mock_account,
+            "icon": "wallet",
+            "color": "#FF5722",
+            "is_pinned": True,
+            "description": "My updated account"
+        }
+        mock_update.return_value = updated_account
+        
+        response = client.patch(
+            f"/accounts/{mock_account['id']}",
+            json={
+                "icon": "wallet",
+                "color": "#FF5722",
+                "is_pinned": True,
+                "description": "My updated account"
+            }
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "UPDATED"
+        assert data["account"]["icon"] == "wallet"
+        assert data["account"]["color"] == "#FF5722"
+        assert data["account"]["is_pinned"] is True
+        assert data["account"]["description"] == "My updated account"

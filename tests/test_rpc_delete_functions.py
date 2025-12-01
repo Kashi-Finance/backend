@@ -25,12 +25,36 @@ def create_mock_client_for_category_delete(user_id: str, category_id: str):
     """Helper to create a properly configured mock client for category deletion."""
     mock_client = MagicMock()
     
-    # Mock table().select().eq().execute() for get_category_by_id call
-    category_table = MagicMock()
-    category_table.select.return_value.eq.return_value.execute.return_value = MockSupabaseResponse(
-        data=[{"id": category_id, "user_id": user_id, "name": "Test Category"}]
-    )
-    mock_client.table.return_value = category_table
+    # Track call counts to return different data for different calls
+    call_count = {"table": 0}
+    
+    def create_mock_table(table_name):
+        """Create mock for category table queries."""
+        call_count["table"] += 1
+        mock_table = MagicMock()
+        
+        # Both get_category_by_id and get_subcategories use:
+        # table("category").select("*").eq(...).execute()
+        mock_select = MagicMock()
+        mock_eq = MagicMock()
+        
+        mock_table.select.return_value = mock_select
+        mock_select.eq.return_value = mock_eq
+        
+        # First call: get_category_by_id - returns the category
+        # Second call: get_subcategories - returns empty list
+        if call_count["table"] == 1:
+            # get_category_by_id: returns list with one category
+            mock_eq.execute.return_value = MockSupabaseResponse(
+                data=[{"id": category_id, "user_id": user_id, "name": "Test Category", "parent_category_id": None}]
+            )
+        else:
+            # get_subcategories: returns empty list
+            mock_eq.execute.return_value = MockSupabaseResponse(data=[])
+        
+        return mock_table
+    
+    mock_client.table.side_effect = create_mock_table
     
     return mock_client
 
@@ -58,16 +82,18 @@ class TestDeleteCategoryReasign:
         )
         mock_client.rpc.return_value.execute.return_value = rpc_response
 
-        success, reassigned, links_removed = await delete_category(
+        success, reassigned, links_removed, deleted, orphaned = await delete_category(
             mock_client, user_id, category_id
         )
 
         assert success is True
         assert reassigned == 5
         assert links_removed == 2
+        assert deleted == 0
+        assert orphaned == 0
         mock_client.rpc.assert_called_once_with(
             "delete_category_reassign",
-            {"p_category_id": category_id, "p_user_id": user_id}
+            {"p_category_id": category_id, "p_user_id": user_id, "p_cascade": False}
         )
 
     @pytest.mark.asyncio
@@ -90,13 +116,15 @@ class TestDeleteCategoryReasign:
         )
         mock_client.rpc.return_value.execute.return_value = rpc_response
 
-        success, reassigned, links_removed = await delete_category(
+        success, reassigned, links_removed, deleted, orphaned = await delete_category(
             mock_client, user_id, category_id
         )
 
         assert success is True
         assert reassigned == 0
         assert links_removed == 0
+        assert deleted == 0
+        assert orphaned == 0
 
     @pytest.mark.asyncio
     async def test_category_deletion_rpc_returns_no_rows(self):
@@ -110,13 +138,15 @@ class TestDeleteCategoryReasign:
         rpc_response = MockSupabaseResponse(data=[])
         mock_client.rpc.return_value.execute.return_value = rpc_response
 
-        success, reassigned, links_removed = await delete_category(
+        success, reassigned, links_removed, deleted, orphaned = await delete_category(
             mock_client, user_id, category_id
         )
 
         assert success is False
         assert reassigned == 0
         assert links_removed == 0
+        assert deleted == 0
+        assert orphaned == 0
 
     @pytest.mark.asyncio
     async def test_category_deletion_rpc_raises_exception(self):
@@ -262,7 +292,7 @@ class TestTransactionAtomicity:
         mock_client.rpc.return_value.execute.return_value = success_response
 
         from backend.services.category_service import delete_category
-        success, _, _ = await delete_category(mock_client, user_id, category_id)
+        success, _, _, _, _ = await delete_category(mock_client, user_id, category_id)
         assert success is True
 
         # Failure case (conceptually)
