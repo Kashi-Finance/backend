@@ -72,8 +72,18 @@ Authorization: Bearer <access_token>
 | GET | \`/accounts/{id}\` | Get account details |
 | PATCH | \`/accounts/{id}\` | Update account |
 | DELETE | \`/accounts/{id}\` | Delete with strategy (reassign or cascade) |
+| GET | \`/accounts/favorite\` | Get user's favorite account |
+| POST | \`/accounts/favorite\` | Set favorite account |
+| DELETE | \`/accounts/favorite/{id}\` | Clear favorite status |
 
 **Account Types:** \`cash\`, \`bank\`, \`credit_card\`, \`loan\`, \`remittance\`, \`crypto\`, \`investment\`
+
+**Account Display Fields:**
+- \`icon\` (required): Icon identifier for UI (e.g., 'wallet', 'bank')
+- \`color\` (required): Hex color code (e.g., '#FF5733')
+- \`is_favorite\`: Auto-select for manual transactions (max 1 per user)
+- \`is_pinned\`: Pin to top of account list
+- \`description\` (optional): User description
 
 **Delete strategies:**
 - \`reassign\` (recommended): Move transactions to target account
@@ -87,13 +97,25 @@ Authorization: Bearer <access_token>
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | \`/categories\` | List system + user categories |
-| POST | \`/categories\` | Create user category |
+| GET | \`/categories\` | List system + user categories (with optional tree view) |
+| POST | \`/categories\` | Create user category (with optional inline subcategories) |
 | GET | \`/categories/{id}\` | Get category details |
-| PATCH | \`/categories/{id}\` | Update user category name |
+| GET | \`/categories/{id}/subcategories\` | List subcategories of a parent |
+| PATCH | \`/categories/{id}\` | Update user category (name, icon, color) |
 | DELETE | \`/categories/{id}\` | Delete with reassignment |
 
 **Flow types:** \`income\`, \`outcome\`
+
+**Category Display Fields:**
+- \`icon\` (required): Icon identifier for UI (e.g., 'shopping', 'food')
+- \`color\` (required): Hex color code (e.g., '#4CAF50')
+- \`parent_category_id\` (optional): Parent category UUID for subcategories
+
+**Subcategory Support:**
+- Max depth: 1 (subcategories cannot have children)
+- Inline creation: POST can create parent + subcategories atomically
+- DELETE orphans subcategories (sets \`parent_category_id = NULL\`)
+- Tree view: \`GET /categories?include_tree=true\` returns nested structure
 
 **System categories** (read-only, \`key\` field set):
 - \`initial_balance\`, \`balance_update\`, \`transfer\`, \`general\`
@@ -101,6 +123,7 @@ Authorization: Bearer <access_token>
 **Delete behavior:**
 - \`cascade=false\` (default): Reassign to flow-type-matched \`general\`
 - \`cascade=true\`: Delete all transactions ⚠️
+- Subcategories become top-level (orphaned)
 
 📖 **Full details:** [docs/api/categories.md](./docs/api/categories.md)
 

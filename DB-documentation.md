@@ -4,7 +4,7 @@
 >
 > This file follows Anthropic's progressive disclosure pattern: concise index here, full details in [docs/db/](./docs/db/).
 
-**Last Updated:** November 28, 2025  
+**Last Updated:** November 30, 2025  
 **Architecture:** Supabase (Auth + Postgres + Storage + RLS + pgvector) + Cloud Run (FastAPI + Python)
 
 ---
@@ -21,6 +21,7 @@
 | Cached Values | [Section 7](#7-cached-values) | [docs/db/cached-values.md](./docs/db/cached-values.md) |
 | Semantic Search | [Section 8](#8-semantic-search) | [docs/db/semantic-search.md](./docs/db/semantic-search.md) |
 | System Data | [Section 9](#9-system-categories--keys) | [docs/db/system-data.md](./docs/db/system-data.md) |
+| Currency Policy | [Section 10](#10-single-currency-per-user) | N/A |
 
 ---
 
@@ -33,6 +34,7 @@
 3. **Cached balances** — Performance optimization (recomputable from transactions)
 4. **Semantic search** — pgvector embeddings on transactions
 5. **Strong typing** — CHECK constraints and PostgreSQL enums
+6. **Single-currency-per-user** — All financial data uses `profile.currency_preference`
 
 📖 **Architecture details:** [docs/db/README.md](./docs/db/README.md)
 
@@ -177,7 +179,45 @@ LIMIT 10;
 
 ---
 
-## 10. Entity Relationships
+## 10. Single-Currency-Per-User
+
+**Policy (Nov 30, 2025):** Each user operates in a single currency.
+
+### Source of Truth
+
+`profile.currency_preference` is the authoritative currency for all user financial data.
+
+### Currency Fields
+
+| Table | Field | Enforcement |
+|-------|-------|-------------|
+| `profile` | `currency_preference` | Source of truth |
+| `account` | `currency` | Must match profile (validated on create) |
+| `wishlist` | `currency_code` | Must match profile (validated on create) |
+| `budget` | `currency` | Auto-populated from profile |
+| `transaction` | — | Inherits from account |
+| `recurring_transaction` | — | Inherits from account |
+
+### Validation RPCs
+
+| RPC | Purpose |
+|-----|---------|
+| `validate_user_currency(user_id, currency)` | Raises exception if currency != profile |
+| `get_user_currency(user_id)` | Returns user's currency_preference |
+| `can_change_user_currency(user_id)` | Returns false if has accounts/wishlists/budgets |
+
+### Changing Currency
+
+Users can only change `currency_preference` if they have:
+- **No accounts** (including soft-deleted)
+- **No wishlists**
+- **No budgets** (including soft-deleted)
+
+📖 **Related migration:** `20251130000001_single_currency_per_user.sql`
+
+---
+
+## 11. Entity Relationships
 
 ```
 auth.users (1) ──→ (1) profile
@@ -194,7 +234,7 @@ recurring_transaction (1) ↔ (1) recurring_transaction (paired)
 
 ---
 
-## 11. Data Integrity
+## 12. Data Integrity
 
 ### CHECK Constraints
 
@@ -216,13 +256,14 @@ recurring_transaction (1) ↔ (1) recurring_transaction (paired)
 
 ---
 
-## 12. Best Practices
+## 13. Best Practices
 
 1. **Always use RLS** — Never bypass in application code
 2. **Soft-delete by default** — Use soft-delete RPCs for user operations
 3. **Recompute regularly** — Run reconciliation jobs for cached values
 4. **Test concurrency** — Use row-level locking in critical RPCs
 5. **Monitor performance** — Watch slow query logs and adjust indexes
+6. **Respect single-currency** — Validate currency on entity creation
 
 ---
 
