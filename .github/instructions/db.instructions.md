@@ -9,6 +9,30 @@ Application code MUST treat this file as the source of truth. Do not invent sche
 
 Always refer to DB-DDL.txt for exact table definitions and RLS policies.
 
+## Documentation Structure (Progressive Disclosure)
+
+The database documentation follows Anthropic's progressive disclosure pattern:
+
+```
+DB-documentation.md           ← Concise index - START HERE
+└── docs/db/
+    ├── README.md             ← Navigation guide
+    ├── tables.md             ← Full table schemas
+    ├── rls.md                ← Row-Level Security policies
+    ├── enums.md              ← PostgreSQL enum definitions
+    ├── indexes.md            ← Index definitions and strategy
+    ├── soft-delete.md        ← Soft-delete patterns
+    ├── cached-values.md      ← Cached balance/consumption
+    ├── semantic-search.md    ← pgvector embeddings
+    └── system-data.md        ← System categories and keys
+```
+
+**How to navigate:**
+1. Start with `DB-documentation.md` for overview and quick reference
+2. Load `docs/db/<topic>.md` only when you need full details
+3. For table schemas, use `docs/db/tables.md`
+4. For RLS policies, use `docs/db/rls.md`
+
 ## 1. Ownership
 
 - Maintained by the data / RLS / persistence team.
