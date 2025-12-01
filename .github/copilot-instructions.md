@@ -96,29 +96,33 @@ When you create or modify an endpoint:
   - Do not log invoice images, extracted invoice text, or personal financial amounts in clear form.
 
 
-## 5. adk Agents
+## 5. AI Components (LLM Workflows)
 
-These are the only allowed adk agents:
+> **Architecture Note (November 2025):** The project uses simplified LLM workflows instead of complex multi-agent architectures. The previous ADK Orchestrator-Workers pattern was replaced with Prompt Chaining for recommendations.
 
-- `InvoiceAgent`
-- `RecommendationCoordinatorAgent`
-- `SearchAgent`
-- `FormatterAgent`
+There are exactly **two (2)** AI-powered components in this project:
 
-Rules:
-- You MUST refer to them explicitly as "adk agents".
-- `SearchAgent` and `FormatterAgent` are AgentTools that are consumed internally by `RecommendationCoordinatorAgent`. They are not exposed directly to the client-facing API. The API talks to `RecommendationCoordinatorAgent`, which then orchestrates its AgentTools.
-- Do NOT create or invoke any other agents unless explicitly told to.
-- Each adk agent MUST:
-  - Have a single, well-defined purpose.
-  - Explicitly reject out-of-domain requests.
-  - Define strict typed input/output schemas that are JSON-serializable.
-  - Never attempt to answer questions beyond its responsibility. For example:
-    - `InvoiceAgent` should NOT answer general finance advice.
-    - `SearchAgent` should NOT explain mental health or give relationship advice.
-  - Never perform database writes directly. The agent returns structured data; persistence is handled by the backend service layer under RLS.
+### 5.1 InvoiceAgent (Single-Shot Multimodal Workflow)
+- **Implementation:** Single-shot Gemini vision call
+- **Purpose:** OCR and structured extraction from receipt images
+- **NOT an ADK agent:** Uses direct Gemini API
 
-Always use the most recent version of the Google ADK documentation when creating or modifying adk agents or their schemas.
+### 5.2 Recommendation System (Prompt Chaining Workflow)
+- **Implementation:** Single-shot DeepSeek V3.2 call
+- **Purpose:** Product recommendations based on user goals
+- **NOT an ADK agent:** Uses OpenAI-compatible API
+- **Location:** `backend/services/recommendation_service.py`
+
+### Rules:
+- Do NOT create new ADK agents
+- Do NOT reference the old multi-agent architecture (RecommendationCoordinatorAgent, SearchAgent, FormatterAgent)
+- Each AI component MUST:
+  - Have a single, well-defined purpose
+  - Explicitly reject out-of-domain requests
+  - Return strict typed JSON output
+  - Never perform database writes directly (persistence handled by API layer under RLS)
+
+For detailed specifications, see `.github/instructions/adk-agents.instructions.md`.
 
 
 ## 6. Database / Persistence Rules
@@ -136,10 +140,55 @@ Never bypass RLS. Assume every row is protected by `user_id = auth.uid()`.
 
 **CRITICAL: `API-endpoints.md` is the SINGLE SOURCE OF TRUTH for all REST endpoint contracts, request/response shapes, field names, and types.**
 
-When working on any endpoint or schema:
+### Documentation Structure (Progressive Disclosure)
+
+The API documentation follows Anthropic's progressive disclosure pattern for optimal AI agent consumption:
+
+```
+API-endpoints.md           ← Concise index - START HERE
+└── docs/api/
+    ├── README.md          ← Navigation guide
+    ├── cross-cutting.md   ← Auth, response formats, dependencies
+    ├── auth-profile.md     ← Auth & Profile endpoints (full details)
+    ├── accounts.md        ← Account endpoints (full details)
+    ├── categories.md      ← Category endpoints (full details)
+    ├── transactions.md    ← Transaction endpoints (full details)
+    ├── invoices.md        ← Invoice workflow (full details)
+    ├── budgets.md         ← Budget endpoints (full details)
+    ├── recurring.md       ← Recurring transactions (full details)
+    ├── transfers.md       ← Transfer endpoints (full details)
+    ├── wishlists.md       ← Wishlist endpoints (full details)
+    └── recommendations.md ← AI recommendations (full details)
+```
+
+### How to Navigate the Documentation
+
+1. **Start with `API-endpoints.md`** - the index provides:
+   - Quick reference tables for all endpoints
+   - Links to detailed documentation per domain
+   - Response format summaries
+   - Feature dependency overview
+
+2. **Load detailed docs on-demand** - only read `docs/api/<domain>.md` when you need:
+   - Full request/response schemas with all fields
+   - Complete behavior descriptions
+   - All status codes and error conditions
+   - Implementation examples
+
+3. **For cross-cutting concerns** - read `docs/api/cross-cutting.md` for:
+   - Authentication flow details
+   - Standard response format
+   - Feature dependencies diagram
+   - Security patterns
+
+### When Working on Endpoints
+
 1. **Always refer to `API-endpoints.md` first** for the authoritative contract.
 2. If you find **inconsistencies** between `API-endpoints.md` and other instruction files (e.g., `api-architecture.instructions.md`, `invoice-agent-specs.md`), **treat `API-endpoints.md` as correct** and update the conflicting file to match.
-3. If you need to change an endpoint contract, **update `API-endpoints.md` first**, then propagate changes to all related files (tests, schemas, services, agent specs, other instructions).
+3. If you need to change an endpoint contract:
+   - Update `API-endpoints.md` index first
+   - Update the corresponding `docs/api/<domain>.md` file
+   - Propagate changes to tests, schemas, services, agent specs
 4. All Pydantic request/response models in `backend/schemas/` **MUST match exactly** the shape and field names documented in `API-endpoints.md`.
 
 This ensures:
@@ -147,6 +196,7 @@ This ensures:
 - Type safety across backend/frontend integration
 - Consistency in Pydantic validation
 - Single point of reference when debugging API issues
+- Optimal context loading for AI agents (progressive disclosure)
 
 
 ## 7. Style, Formatting, and Quality
