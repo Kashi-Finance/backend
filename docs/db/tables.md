@@ -57,8 +57,20 @@ User profile and preferences. 1:1 relationship with `auth.users`.
 | `currency_preference` | TEXT | `NOT NULL` | ISO currency code for UI | `GTQ` |
 | `locale` | TEXT | `NOT NULL DEFAULT 'system'` | Localization hint | `system` |
 | `country` | TEXT | `NOT NULL` | ISO-2 country code | `GT` |
+| `current_streak` | INTEGER | `NOT NULL DEFAULT 0` | Current consecutive days with activity | `7` |
+| `longest_streak` | INTEGER | `NOT NULL DEFAULT 0` | All-time longest streak | `14` |
+| `last_activity_date` | DATE | `NULLABLE` | Last date of financial activity | `2025-12-01` |
+| `streak_freeze_available` | BOOLEAN | `NOT NULL DEFAULT true` | Whether freeze is available this week | `true` |
+| `streak_freeze_used_this_week` | BOOLEAN | `NOT NULL DEFAULT false` | Whether freeze was used this week | `false` |
 | `created_at` | TIMESTAMPTZ | `DEFAULT now()` | Row creation timestamp | `2025-10-31T12:00:00-06:00` |
 | `updated_at` | TIMESTAMPTZ | `DEFAULT now()` | Last update timestamp | `2025-10-31T12:00:00-06:00` |
+
+**Engagement/Streak Fields:**
+- `current_streak`: Increments when user logs activity on consecutive days
+- `longest_streak`: Personal best, updated when current_streak exceeds it
+- `last_activity_date`: Used to calculate streak continuity (UTC date)
+- `streak_freeze_available`: One free freeze per week, protects streak if user misses a day
+- `streak_freeze_used_this_week`: Reset by cron job every Monday
 
 **Indexes:** None (small table, single-row lookups by PK)
 
@@ -69,6 +81,7 @@ User profile and preferences. 1:1 relationship with `auth.users`.
   - `last_name` → set to `NULL`
   - `avatar_url` → set to `NULL`
 - `country` and `currency_preference` are **kept** for system consistency
+- Streak fields are preserved (they're not personal data)
 - The row must remain because it provides localization data to agents
 
 ---
