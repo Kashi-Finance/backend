@@ -67,9 +67,26 @@ CREATE TABLE public.profile (
   currency_preference text        NOT NULL,  -- ISO currency code (e.g., 'GTQ', 'USD')
   locale              text        NOT NULL DEFAULT 'system',
   country             text        NOT NULL,  -- ISO-2 country code (e.g., 'GT', 'US')
+  -- Engagement / Streak fields
+  current_streak      integer     NOT NULL DEFAULT 0,  -- Current consecutive days with activity
+  longest_streak      integer     NOT NULL DEFAULT 0,  -- All-time longest streak
+  last_activity_date  date        NULL,                -- Last date of financial activity (for streak calculation)
+  streak_freeze_available boolean NOT NULL DEFAULT true,  -- One free freeze per week
+  streak_freeze_used_this_week boolean NOT NULL DEFAULT false,  -- Reset every Monday
   created_at          timestamptz NOT NULL DEFAULT now(),
   updated_at          timestamptz NOT NULL DEFAULT now()
 );
+
+COMMENT ON COLUMN public.profile.current_streak IS 
+  'Current consecutive days with at least one financial activity (transaction or invoice). Reset to 0 if user misses a day without a streak freeze.';
+COMMENT ON COLUMN public.profile.longest_streak IS 
+  'All-time longest streak achieved. Updated when current_streak exceeds this value.';
+COMMENT ON COLUMN public.profile.last_activity_date IS 
+  'Last calendar date (UTC) when user logged a transaction or invoice. Used to calculate streak continuity.';
+COMMENT ON COLUMN public.profile.streak_freeze_available IS 
+  'Whether user can use a streak freeze this week. One free freeze per week, resets every Monday.';
+COMMENT ON COLUMN public.profile.streak_freeze_used_this_week IS 
+  'Whether user has used their streak freeze this week. Auto-triggers when streak would break but freeze is available.';
 
 -- =========================================================
 -- Table: account
@@ -84,6 +101,11 @@ CREATE TABLE public.account (
   name           text           NOT NULL,  -- User-friendly name
   type           account_type_enum NOT NULL,
   currency       text           NOT NULL,  -- ISO currency code
+  icon           text           NOT NULL,  -- Icon identifier (e.g., 'wallet', 'bank', 'credit_card')
+  color          text           NOT NULL,  -- Hex color code (e.g., '#FF5733')
+  is_favorite    boolean        NOT NULL DEFAULT false,  -- Auto-select for manual transactions (max 1 per user)
+  is_pinned      boolean        NOT NULL DEFAULT false,  -- Pin to top of account list
+  description    text           NULL,      -- Optional user description
   cached_balance numeric(12,2)  NOT NULL DEFAULT 0,
   deleted_at     timestamptz    NULL,
   created_at     timestamptz    NOT NULL DEFAULT now(),
@@ -94,9 +116,18 @@ COMMENT ON COLUMN public.account.cached_balance IS
   'Performance cache recomputable from transaction rows. Use recompute_account_balance(account_id) to verify/correct.';
 COMMENT ON COLUMN public.account.deleted_at IS 
   'Soft-delete timestamp. When set, account is hidden from users but retained for audit/recovery. Deletion is tracked via RLS user_id enforcement; admin actions should use audit logs.';
+COMMENT ON COLUMN public.account.icon IS 
+  'Icon identifier for UI display. Common values: wallet, bank, credit_card, loan, crypto, investment.';
+COMMENT ON COLUMN public.account.color IS 
+  'Hex color code for UI display (e.g., #FF5733). Must be valid 6-digit hex with leading #.';
+COMMENT ON COLUMN public.account.is_favorite IS 
+  'When true, this account is auto-selected when creating manual transactions. Only one account per user can be favorite. Use set_favorite_account RPC to safely toggle.';
+COMMENT ON COLUMN public.account.is_pinned IS 
+  'When true, this account appears at the top of account lists for quick access.';
 
 CREATE INDEX account_user_id_idx ON public.account (user_id);
 CREATE INDEX account_deleted_at_idx ON public.account (deleted_at) WHERE deleted_at IS NOT NULL;
+CREATE INDEX account_user_favorite_idx ON public.account (user_id, is_favorite) WHERE is_favorite = true;
 
 -- =========================================================
 -- Table: category
@@ -106,28 +137,43 @@ CREATE INDEX account_deleted_at_idx ON public.account (deleted_at) WHERE deleted
 -- =========================================================
 
 CREATE TABLE public.category (
-  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     uuid
-                REFERENCES auth.users(id) ON DELETE CASCADE,
-  key         text,              -- Stable system key (only for system categories)
-  name        text        NOT NULL,
-  flow_type   flow_type_enum NOT NULL,
-  created_at  timestamptz NOT NULL DEFAULT now(),
-  updated_at  timestamptz NOT NULL DEFAULT now(),
+  id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id           uuid
+                      REFERENCES auth.users(id) ON DELETE CASCADE,
+  parent_category_id uuid
+                      REFERENCES public.category(id) ON DELETE CASCADE,
+  key               text,              -- Stable system key (only for system categories)
+  name              text        NOT NULL,
+  flow_type         flow_type_enum NOT NULL,
+  icon              text        NOT NULL,  -- Icon identifier (e.g., 'shopping', 'food', 'transport')
+  color             text        NOT NULL,  -- Hex color code (e.g., '#4CAF50')
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  updated_at        timestamptz NOT NULL DEFAULT now(),
   
   CONSTRAINT category_key_unique UNIQUE (key, flow_type),
   CONSTRAINT category_scope_ck CHECK (
     (user_id IS NULL AND key IS NOT NULL) OR
     (user_id IS NOT NULL AND key IS NULL)
+  ),
+  -- Subcategories can only exist for user categories, not system categories
+  CONSTRAINT category_parent_ck CHECK (
+    parent_category_id IS NULL OR (user_id IS NOT NULL AND key IS NULL)
   )
 );
 
 COMMENT ON TABLE public.category IS 
-  'Transaction categories. System categories (user_id NULL) are global and immutable. User categories are personal and editable.';
+  'Transaction categories. System categories (user_id NULL) are global and immutable. User categories are personal and editable. Subcategories supported via parent_category_id (max depth: 1).';
 COMMENT ON COLUMN public.category.key IS 
   'Stable identifier for system categories (e.g., "transfer", "general"). NULL for user categories.';
+COMMENT ON COLUMN public.category.parent_category_id IS 
+  'Reference to parent category for subcategories. Only user categories can have parents. Max depth is 1 (parent -> child, no grandchildren). Parent must have same flow_type and user_id.';
+COMMENT ON COLUMN public.category.icon IS 
+  'Icon identifier for UI display. Common values: shopping, food, transport, entertainment, utilities, health, education.';
+COMMENT ON COLUMN public.category.color IS 
+  'Hex color code for UI display (e.g., #4CAF50). Must be valid 6-digit hex with leading #.';
 
 CREATE INDEX category_user_id_idx ON public.category (user_id) WHERE user_id IS NOT NULL;
+CREATE INDEX category_parent_id_idx ON public.category (parent_category_id) WHERE parent_category_id IS NOT NULL;
 
 -- =========================================================
 -- Table: invoice
@@ -270,6 +316,7 @@ CREATE TABLE public.budget (
   user_id            uuid           NOT NULL
                                     REFERENCES auth.users(id) ON DELETE CASCADE,
   limit_amount       numeric(12,2)  NOT NULL CHECK (limit_amount > 0),
+  currency           text           NOT NULL,  -- ISO currency code (must match profile.currency_preference)
   frequency          budget_frequency_enum NOT NULL,
   interval           integer        NOT NULL DEFAULT 1 CHECK (interval >= 1),
   start_date         date           NOT NULL,
@@ -281,6 +328,8 @@ CREATE TABLE public.budget (
   updated_at         timestamptz    NOT NULL DEFAULT now()
 );
 
+COMMENT ON COLUMN public.budget.currency IS 
+  'ISO currency code for this budget. Must match profile.currency_preference (single-currency-per-user policy).';
 COMMENT ON COLUMN public.budget.cached_consumption IS 
   'Performance cache for current period consumption. Recomputable via recompute_budget_consumption(budget_id, period_start, period_end).';
 COMMENT ON COLUMN public.budget.interval IS 
@@ -678,6 +727,38 @@ FOR DELETE USING (
       AND (w.user_id = auth.uid() OR auth.role() = 'service_role')
   )
 );
+
+-- =========================================================
+-- Single-Currency-Per-User Policy
+-- 
+-- Architecture Decision:
+-- - profile.currency_preference is the source of truth
+-- - All account.currency MUST match profile.currency_preference
+-- - All wishlist.currency_code MUST match profile.currency_preference
+-- - All budget.currency MUST match profile.currency_preference
+-- - Validation is enforced at service layer via RPC functions
+-- =========================================================
+
+-- =========================================================
+-- RPC Functions
+-- 
+-- All RPC functions are maintained in the migration file:
+-- supabase/migrations/20251201000001_all_rpc_functions.sql
+-- 
+-- This includes:
+-- - Account Management RPCs (delete_account_reassign, delete_account_cascade)
+-- - Transaction Management RPCs
+-- - Transfer RPCs
+-- - Recurring Transaction RPCs
+-- - Category Management RPCs
+-- - Wishlist RPCs
+-- - Cache Recomputation RPCs
+-- - Currency Validation RPCs
+-- - Favorite Account RPCs
+-- - Engagement / Streak RPCs (update_user_streak, get_user_streak, reset_weekly_streak_freezes)
+-- 
+-- DO NOT add RPC functions to this file. Use the migration file instead.
+-- =========================================================
 
 -- =========================================================
 -- End of DDL
