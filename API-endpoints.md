@@ -20,6 +20,7 @@
 | Transfers | [Section 8](#8-transfers) | [docs/api/transfers.md](./docs/api/transfers.md) |
 | Wishlists | [Section 9](#9-wishlists) | [docs/api/wishlists.md](./docs/api/wishlists.md) |
 | Recommendations | [Section 10](#10-recommendations) | [docs/api/recommendations.md](./docs/api/recommendations.md) |
+| Engagement | [Section 11](#11-engagement) | [docs/api/engagement.md](./docs/api/engagement.md) |
 | Cross-Cutting | [Section 0](#0-authentication--security) | [docs/api/cross-cutting.md](./docs/api/cross-cutting.md) |
 
 ---
@@ -284,6 +285,40 @@ Photo → POST /invoices/ocr → DRAFT preview
 
 ---
 
+## 11. Engagement
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | \`/engagement/streak\` | Get full streak status with risk assessment |
+| GET | \`/engagement/summary\` | Get condensed engagement stats for dashboard |
+| GET | \`/engagement/budget-score\` | Get budget health score (0-100) with breakdown |
+
+**Streak System:**
+- \`current_streak\`: Consecutive days with financial activity
+- \`longest_streak\`: All-time personal best
+- \`streak_freeze_available\`: One free freeze per week (resets Mondays)
+- \`streak_at_risk\`: True if no activity logged today
+
+**Budget Health Score:**
+- Score from 0-100 based on budget adherence
+- Per-budget breakdown with utilization and status
+- Color coding: green (80+), yellow (50-79), red (<50)
+- Status: `on_track` (<75%), `warning` (75-100%), `over` (>100%)
+
+**Auto-updates:**
+- Streak is updated automatically when:
+  - Creating a transaction (\`POST /transactions\`)
+  - Committing an invoice (\`POST /invoices/commit\`)
+
+**Profile Fields:**
+Streak data is also included in \`GET /profile\` response:
+- \`current_streak\`, \`longest_streak\`, \`last_activity_date\`
+- \`streak_freeze_available\`, \`streak_freeze_used_this_week\`
+
+📖 **Full details:** [docs/api/engagement.md](./docs/api/engagement.md)
+
+---
+
 ## Response Formats
 
 ### List Responses (200)
@@ -388,6 +423,7 @@ profile ──────────────► (context for all endpoints
     ├── transfers.md          # Transfers details
     ├── wishlists.md          # Wishlists details
     ├── recommendations.md    # Recommendations details
+    ├── engagement.md         # Engagement/streak details
     └── cross-cutting.md      # Security, dependencies, patterns
 \`\`\`
 
