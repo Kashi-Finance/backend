@@ -39,6 +39,19 @@ Always use the most recent version of the Google ADK documentation when creating
 
 Do not assume deployment steps. Local dev is Docker-based. Cloud deployment details are intentionally omitted in this version.
 
+### Package Manager: uv
+
+This project uses **[uv](https://docs.astral.sh/uv/)** as the Python package and project manager (NOT pip).
+
+- **Install dependencies:** `uv sync` (reads from `pyproject.toml` and `uv.lock`)
+- **Add a dependency:** `uv add <package>`
+- **Add a dev dependency:** `uv add --dev <package>`
+- **Run scripts:** `uv run <script.py>` or `uv run pytest`
+- **Lock file:** `uv.lock` (committed to version control)
+- **Virtual environment:** Managed automatically by uv in `.venv/`
+
+**DO NOT use pip directly.** All dependency management must go through uv.
+
 
 ## 3. Security and Authentication
 
@@ -217,9 +230,9 @@ All new backend code (routes, services, auth helpers, and adk agent wrappers) MU
 The GitHub Actions pipeline executes the following steps:
 
 ```bash
-pip install -r requirements.txt
-supabase db start  # local Postgres + Supabase stack
-pytest -q
+uv sync                    # Install dependencies from uv.lock
+supabase db start          # Local Postgres + Supabase stack
+uv run pytest -q           # Run tests via uv
 ```
 
 If the `tests/` folder exists, pytest must pass. If it doesn't exist, CI will skip tests (but this is not desired long term).
