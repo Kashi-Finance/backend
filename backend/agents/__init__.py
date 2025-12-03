@@ -1,22 +1,23 @@
 """
-adk Agents for Kashi Finances Backend.
+AI Components for Kashi Finances Backend.
 
-Contains implementations of the four allowed adk agents built on Google ADK:
-- InvoiceAgent: OCR and structured extraction from receipts/invoices
-- RecommendationCoordinatorAgent: Orchestrates recommendation flows
-- SearchAgent: AgentTool for product/offer search (used by RecommendationCoordinatorAgent)
-- FormatterAgent: AgentTool for result formatting (used by RecommendationCoordinatorAgent)
+Contains implementations of AI-powered workflows:
 
-CRITICAL RULES (from .github/instructions/adk-agents.instructions.md):
-- These are the ONLY allowed adk agents
-- SearchAgent and FormatterAgent are AgentTools, NOT exposed to API layer directly
-- API endpoints call RecommendationCoordinatorAgent, which orchestrates its AgentTools
-- All agents MUST define strict typed input/output schemas (JSON-serializable)
-- All agents MUST reject out-of-domain requests
-- All agents MUST NOT write to database directly (return structured data only)
+1. InvoiceAgent (Single-Shot Multimodal Workflow)
+   - Uses Gemini vision for OCR and structured extraction from receipts
+   - NOT an ADK agent - uses direct Gemini API
 
-Always use the most recent version of the Google ADK documentation when creating
-or modifying adk agents or their schemas.
+2. Recommendation System (Prompt Chaining Workflow)
+   - Uses DeepSeek V3.2 for product recommendations
+   - NOT an ADK agent - uses OpenAI-compatible API
+   - Located in: backend/services/recommendation_service.py
+
+ARCHITECTURE NOTE (November 2025):
+The project uses simplified LLM workflows instead of complex multi-agent 
+architectures. The previous ADK Orchestrator-Workers pattern for recommendations 
+was replaced with Prompt Chaining for improved reliability, cost, and maintainability.
+
+See .github/instructions/adk-agents.instructions.md for details.
 """
 
 from backend.agents.invoice import (
@@ -34,7 +35,3 @@ __all__ = [
     "INVOICE_INPUT_SCHEMA",
     "INVOICE_OUTPUT_SCHEMA",
 ]
-
-# TODO: Implement RecommendationCoordinatorAgent
-# TODO: Implement SearchAgent (AgentTool)
-# TODO: Implement FormatterAgent (AgentTool)
