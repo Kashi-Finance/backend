@@ -1,912 +1,591 @@
-# RPC Documentation
+# Kashi Finances — RPC Functions Index
 
-**Date:** November 15, 2025  
-**Purpose:** Comprehensive reference for all PostgreSQL RPC functions in the Kashi Finances backend
+> **Quick reference for PostgreSQL RPC functions with pointers to detailed documentation.**
+>
+> This file follows Anthropic's progressive disclosure pattern: concise index here, full details in [docs/rpc/](./docs/rpc/).
 
----
-
-## Table of Contents
-
-1. [Account Management RPCs](#account-management-rpcs)
-2. [Transaction Management RPCs](#transaction-management-rpcs)
-3. [Category Management RPCs](#category-management-rpcs)
-4. [Transfer RPCs](#transfer-rpcs)
-5. [Recurring Transaction RPCs](#recurring-transaction-rpcs)
-6. [Wishlist RPCs](#wishlist-rpcs)
-7. [Soft-Delete RPCs](#soft-delete-rpcs)
-8. [Cache Recomputation RPCs](#cache-recomputation-rpcs)
-9. [RPC Usage Guidelines](#rpc-usage-guidelines)
+**Last Updated:** December 1, 2025  
+**Total RPCs:** 25  
+**Architecture:** Supabase + PostgreSQL + SECURITY DEFINER functions
 
 ---
 
-## Account Management RPCs
+## Navigation
 
-### `delete_account_reassign`
+| Category | Quick Ref | Full Docs |
+|----------|-----------|-----------|
+| Accounts | [Section 2](#2-account-management) | [docs/rpc/accounts.md](./docs/rpc/accounts.md) |
+| Transactions | [Section 3](#3-transaction-management) | [docs/rpc/transactions.md](./docs/rpc/transactions.md) |
+| Categories | [Section 4](#4-category-management) | [docs/rpc/categories.md](./docs/rpc/categories.md) |
+| Transfers | [Section 5](#5-transfer-management) | [docs/rpc/transfers.md](./docs/rpc/transfers.md) |
+| Recurring | [Section 6](#6-recurring-transaction-management) | [docs/rpc/recurring.md](./docs/rpc/recurring.md) |
+| Wishlists | [Section 7](#7-wishlist-management) | [docs/rpc/wishlists.md](./docs/rpc/wishlists.md) |
+| Invoices | [Section 8](#8-invoice-management) | [docs/rpc/invoices.md](./docs/rpc/invoices.md) |
+| Budgets | [Section 9](#9-budget-management) | [docs/rpc/budgets.md](./docs/rpc/budgets.md) |
+| Cache | [Section 10](#10-cache-recomputation) | [docs/rpc/guidelines.md](./docs/rpc/guidelines.md) |
+| Currency | [Section 11](#11-currency-validation) | [docs/rpc/currency.md](./docs/rpc/currency.md) |
+| Favorites | [Section 12](#12-favorite-account-management) | [docs/rpc/favorites.md](./docs/rpc/favorites.md) |
+| Engagement | [Section 13](#13-engagement--streak) | [docs/rpc/engagement.md](./docs/rpc/engagement.md) |
+| Guidelines | [Section 0](#0-rpc-principles--guidelines) | [docs/rpc/guidelines.md](./docs/rpc/guidelines.md) |
 
-**Purpose:** Soft-delete an account after reassigning all transactions and recurring templates to a target account.
+---
 
-**Signature:**
-```sql
-CREATE OR REPLACE FUNCTION delete_account_reassign(
-  p_account_id uuid,
-  p_user_id uuid,
-  p_target_account_id uuid
-)
-RETURNS TABLE(
-  recurring_templates_reassigned INT,
-  transactions_reassigned INT,
-  account_soft_deleted BOOLEAN,
-  deleted_at TIMESTAMPTZ
-)
-```
+## 0. RPC Principles & Guidelines
 
-**Security:** `SECURITY DEFINER` (runs with creator privileges, validates `user_id`)
+**Core Principles:**
 
-**Behavior:**
-1. Validates both `p_account_id` and `p_target_account_id` belong to `p_user_id`
-2. Reassigns all `recurring_transaction` rows to target account
-3. Reassigns all `transaction` rows to target account
-4. Soft-deletes source account (sets `deleted_at`)
-5. Returns counts and soft-delete status
+1. **Always pass `user_id`** — Extract from Supabase Auth token, never trust client
+2. **SECURITY DEFINER** — All RPCs bypass RLS but validate ownership explicitly  
+3. **Atomicity** — All operations wrapped in single DB transaction
+4. **Soft-delete by default** — Used for accounts, transactions, invoices, budgets, recurring
+5. **Hard-delete when simple** — Used for categories, wishlists (no audit needed)
+6. **RLS validation** — Every RPC validates `user_id = auth.uid()` before proceeding
 
-**Usage:**
+**Error Handling:**
+- RPCs raise `EXCEPTION` on validation failure
+- Backend converts to HTTP 400/403/404
+- Never expose raw exception messages to client
+
+**Testing Requirements:**
+- Happy path: valid inputs, successful operations
+- Ownership validation: reject wrong `user_id`
+- Edge cases: empty results, zero amounts, null fields
+- Atomicity: verify transaction consistency on rollback
+
+📖 **Full guidelines:** [docs/rpc/guidelines.md](./docs/rpc/guidelines.md)
+
+---
+
+## 1. Quick Reference by Function
+
+| Function | Purpose | Returns | Status |
+|----------|---------|---------|--------|
+| **Account Management** |
+| `delete_account_reassign` | Soft-delete + reassign transactions | `(count, count, boolean, timestamptz)` | ✅ Active |
+| `delete_account_cascade` | Soft-delete + cascade all data | `(count, count, boolean, timestamptz)` | ✅ Active |
+| `set_favorite_account` | Set favorite account (max 1) | `(uuid, uuid, boolean)` | ✅ Active |
+| `clear_favorite_account` | Clear favorite status | `(boolean)` | ✅ Active |
+| `get_favorite_account` | Get user's favorite account | `uuid` or `NULL` | ✅ Active |
+| **Transaction Management** |
+| `delete_transaction` | Soft-delete single transaction | `(boolean, timestamptz)` | ✅ Active |
+| **Category Management** |
+| `delete_category_reassign` | Delete + reassign transactions | `(count, boolean)` | ✅ Active |
+| **Transfer Management** |
+| `create_transfer` | Create paired transactions | `(uuid, uuid)` | ✅ Active |
+| `update_transfer` | Update both paired transactions | `(uuid, uuid, count)` | ✅ Active |
+| `delete_transfer` | Soft-delete both paired transactions | `(count)` | ✅ Active |
+| **Recurring Transactions** |
+| `sync_recurring_transactions` | Generate pending transactions | `(count, count)` | ✅ Active |
+| `create_recurring_transfer` | Create paired templates | `(uuid, uuid)` | ✅ Active |
+| `delete_recurring_transaction` | Soft-delete template | `(boolean, timestamptz)` | ✅ Active |
+| `delete_recurring_and_pair` | Soft-delete both templates | `(count)` | ✅ Active |
+| **Wishlist Management** |
+| `create_wishlist_with_items` | Create + add items atomically | `(uuid, count)` | ✅ Active |
+| **Invoice Management** |
+| `delete_invoice` | Soft-delete invoice | `(boolean, timestamptz)` | ✅ Active |
+| **Budget Management** |
+| `delete_budget` | Soft-delete budget | `(boolean, timestamptz)` | ✅ Active |
+| `recompute_budget_consumption` | Recalculate cached consumption | `numeric(12,2)` | ✅ Active |
+| **Cache Recomputation** |
+| `recompute_account_balance` | Recalculate cached balance | `numeric(12,2)` | ✅ Active |
+| **Currency Validation** |
+| `validate_user_currency` | Validate currency matches profile | `boolean` | ✅ Active |
+| `get_user_currency` | Get user's currency preference | `text` | ✅ Active |
+| `can_change_user_currency` | Check if currency can be changed | `boolean` | ✅ Active |
+| **Engagement & Streak** |
+| `update_user_streak` | Update streak after activity | `(count, count, boolean, boolean, boolean)` | ✅ Active |
+| `get_user_streak` | Get streak status with risk | `(count, count, date, boolean, boolean, count)` | ✅ Active |
+| `reset_weekly_streak_freezes` | Reset all user freezes (cron job) | `count` | ✅ Active |
+
+---
+
+## 2. Account Management
+
+### Overview
+
+**RPCs:** 5 total (2 deletion strategies, 3 favorite management)
+
+| Function | Purpose | Quick Signature |
+|----------|---------|-----------------|
+| `delete_account_reassign` | Soft-delete after reassigning transactions | `(uuid, uuid, uuid) → (int, int, bool, timestamptz)` |
+| `delete_account_cascade` | Soft-delete with cascade | `(uuid, uuid) → (int, int, bool, timestamptz)` |
+| `set_favorite_account` | Set as favorite (1 per user) | `(uuid, uuid) → (uuid, uuid, bool)` |
+| `clear_favorite_account` | Clear favorite status | `(uuid, uuid) → (bool)` |
+| `get_favorite_account` | Retrieve favorite account ID | `(uuid) → uuid or NULL` |
+
+**Common Usage Pattern:**
 ```python
-# Python (via Supabase client)
-result = supabase_client.rpc(
-    'delete_account_reassign',
-    {
-        'p_account_id': source_account_uuid,
-        'p_user_id': user_uuid,
-        'p_target_account_id': target_account_uuid
-    }
-).execute()
+# Delete with reassignment
+result = supabase.rpc('delete_account_reassign', {
+    'p_account_id': source_uuid,
+    'p_user_id': user_uuid,
+    'p_target_account_id': dest_uuid
+}).execute()
+
+# Set favorite
+result = supabase.rpc('set_favorite_account', {
+    'p_account_id': account_uuid,
+    'p_user_id': user_uuid
+}).execute()
 ```
 
-**Notes:**
-- All operations are atomic (single transaction)
-- Source account becomes invisible to user queries (RLS filters `deleted_at IS NULL`)
-- Transactions remain queryable and linked to target account
+**Key Details:**
+- `delete_account_reassign` vs `delete_account_cascade` choose different strategies
+- Source account becomes invisible (RLS filters `deleted_at IS NULL`)
+- Paired transfers properly handled (FK references cleared)
+- Only 1 favorite per user (automatically unsets previous)
+
+📖 **Full details:** [docs/rpc/accounts.md](./docs/rpc/accounts.md)
 
 ---
 
-### `delete_account_cascade`
+## 3. Transaction Management
 
-**Purpose:** Soft-delete an account along with all its transactions and recurring templates.
+### Overview
 
-**Signature:**
-```sql
-CREATE OR REPLACE FUNCTION delete_account_cascade(
-  p_account_id uuid,
-  p_user_id uuid
-)
-RETURNS TABLE(
-  recurring_templates_soft_deleted INT,
-  transactions_soft_deleted INT,
-  account_soft_deleted BOOLEAN,
-  deleted_at TIMESTAMPTZ
-)
-```
+**RPCs:** 1 total (soft-delete)
 
-**Security:** `SECURITY DEFINER` (runs with creator privileges, validates `user_id`)
+| Function | Purpose | Quick Signature |
+|----------|---------|-----------------|
+| `delete_transaction` | Soft-delete single transaction | `(uuid, uuid) → (bool, timestamptz)` |
 
-**Behavior:**
-1. Validates `p_account_id` belongs to `p_user_id`
-2. Soft-deletes all `recurring_transaction` rows for this account
-3. Soft-deletes all `transaction` rows for this account
-4. Clears `paired_transaction_id` on any paired transfers (orphan handling)
-5. Soft-deletes the account
-6. Returns counts and soft-delete status
-
-**Usage:**
+**Common Usage Pattern:**
 ```python
-# Python (via Supabase client)
-result = supabase_client.rpc(
-    'delete_account_cascade',
-    {
-        'p_account_id': account_uuid,
-        'p_user_id': user_uuid
-    }
-).execute()
+result = supabase.rpc('delete_transaction', {
+    'p_transaction_id': transaction_uuid,
+    'p_user_id': user_uuid
+}).execute()
 ```
 
-**Notes:**
-- All soft-deleted records invisible to user queries (RLS enforcement)
-- Paired transaction references cleared to prevent orphan FK issues
-- Data remains in database for audit/recovery
-
----
-
-## Transaction Management RPCs
-
-### `delete_transaction`
-
-**Purpose:** Soft-delete a single transaction (set `deleted_at`).
-
-**Signature:**
-```sql
-CREATE OR REPLACE FUNCTION delete_transaction(
-  p_transaction_id uuid,
-  p_user_id uuid
-)
-RETURNS TABLE(
-  transaction_soft_deleted BOOLEAN,
-  deleted_at TIMESTAMPTZ
-)
-```
-
-**Security:** `SECURITY DEFINER` (validates ownership via `user_id`)
-
-**Behavior:**
-1. Validates `p_transaction_id` belongs to `p_user_id`
-2. Sets `deleted_at = now()` on the transaction
-3. Returns soft-delete status and timestamp
-
-**Usage:**
-```python
-# Python (via Supabase client)
-result = supabase_client.rpc(
-    'delete_transaction',
-    {
-        'p_transaction_id': transaction_uuid,
-        'p_user_id': user_uuid
-    }
-).execute()
-```
-
-**Notes:**
-- Transaction becomes invisible to user queries (RLS filters `deleted_at IS NULL`)
-- Account balance caches may need recomputation after this operation
+**Key Details:**
+- Transaction becomes invisible to user queries (RLS)
+- Account balance caches may need recomputation
 - Does NOT clear `paired_transaction_id` (use `delete_transfer` for transfers)
 
+📖 **Full details:** [docs/rpc/transactions.md](./docs/rpc/transactions.md)
+
 ---
 
-## Category Management RPCs
+## 4. Category Management
 
-### `delete_category_reassign`
+### Overview
 
-**Purpose:** Delete a user category after reassigning all transactions to a fallback category.
+**RPCs:** 1 total (delete with reassignment)
 
-**Signature:**
-```sql
-CREATE OR REPLACE FUNCTION delete_category_reassign(
-  p_category_id uuid,
-  p_user_id uuid,
-  p_fallback_category_id uuid
-)
-RETURNS TABLE(
-  transactions_reassigned INT,
-  category_deleted BOOLEAN
-)
-```
+| Function | Purpose | Quick Signature |
+|----------|---------|-----------------|
+| `delete_category_reassign` | Delete category + reassign transactions | `(uuid, uuid, uuid) → (int, bool)` |
 
-**Security:** `SECURITY DEFINER` (validates ownership)
-
-**Behavior:**
-1. Validates `p_category_id` is a user category (not system category)
-2. Validates `p_category_id` belongs to `p_user_id`
-3. Reassigns all transactions from `p_category_id` to `p_fallback_category_id`
-4. Physically deletes the category (hard-delete, no soft-delete for categories)
-5. Returns count and delete status
-
-**Usage:**
+**Common Usage Pattern:**
 ```python
-# Python (via Supabase client)
-result = supabase_client.rpc(
-    'delete_category_reassign',
-    {
-        'p_category_id': category_uuid,
-        'p_user_id': user_uuid,
-        'p_fallback_category_id': fallback_uuid  # Usually "general" category
-    }
-).execute()
+result = supabase.rpc('delete_category_reassign', {
+    'p_category_id': category_uuid,
+    'p_user_id': user_uuid,
+    'p_fallback_category_id': general_uuid  # Usually "general"
+}).execute()
 ```
 
-**Notes:**
-- Categories use **hard-delete** (not soft-delete) for simplicity
-- System categories (with `key` field) cannot be deleted
+**Key Details:**
+- **Hard-delete** (not soft-delete) — categories don't need audit trail
+- System categories (`key` field set) cannot be deleted
 - Typically reassign to flow-specific "general" category
 
+�� **Full details:** [docs/rpc/categories.md](./docs/rpc/categories.md)
+
 ---
 
-## Transfer RPCs
+## 5. Transfer Management
 
-### `create_transfer`
+### Overview
 
-**Purpose:** Atomically create a transfer (two paired transactions: one outcome, one income).
+**RPCs:** 3 total (create, update, delete)
 
-**Signature:**
-```sql
-CREATE OR REPLACE FUNCTION create_transfer(
-  p_user_id uuid,
-  p_from_account_id uuid,
-  p_to_account_id uuid,
-  p_amount numeric(12,2),
-  p_description text,
-  p_date timestamptz
-)
-RETURNS TABLE(
-  from_transaction_id uuid,
-  to_transaction_id uuid
-)
-```
+| Function | Purpose | Quick Signature |
+|----------|---------|-----------------|
+| `create_transfer` | Atomically create paired transactions | `(uuid, uuid, uuid, numeric, text, timestamptz) → (uuid, uuid)` |
+| `update_transfer` | Update both paired transactions | `(uuid, uuid, ...) → (uuid, uuid, int)` |
+| `delete_transfer` | Soft-delete both paired transactions | `(uuid, uuid) → (int)` |
 
-**Security:** `SECURITY DEFINER` (validates accounts belong to `user_id`)
-
-**Behavior:**
-1. Validates both accounts belong to `p_user_id`
-2. Inserts "outcome" transaction in `p_from_account_id` with `flow_type='outcome'`
-3. Inserts "income" transaction in `p_to_account_id` with `flow_type='income'`
-4. Sets `paired_transaction_id` on both transactions to link them
-5. Uses "transfer" system category (looked up by `key='transfer'`)
-6. Returns both transaction UUIDs
-
-**Usage:**
+**Common Usage Pattern:**
 ```python
-# Python (via Supabase client)
-result = supabase_client.rpc(
-    'create_transfer',
-    {
-        'p_user_id': user_uuid,
-        'p_from_account_id': source_account_uuid,
-        'p_to_account_id': dest_account_uuid,
-        'p_amount': 150.00,
-        'p_description': 'Transfer to savings',
-        'p_date': '2025-11-15T14:30:00Z'
-    }
-).execute()
+# Create transfer
+result = supabase.rpc('create_transfer', {
+    'p_user_id': user_uuid,
+    'p_from_account_id': source_uuid,
+    'p_to_account_id': dest_uuid,
+    'p_amount': 150.00,
+    'p_description': 'Transfer to savings',
+    'p_date': '2025-11-15T14:30:00Z'
+}).execute()
+
+# Delete transfer (pass either transaction UUID)
+result = supabase.rpc('delete_transfer', {
+    'p_transaction_id': either_transaction_uuid,
+    'p_user_id': user_uuid
+}).execute()
 ```
 
-**Notes:**
-- Both transactions created atomically (single DB transaction)
+**Key Details:**
+- Both transactions created atomically
+- Uses system "transfer" category automatically
 - Paired transactions linked via `paired_transaction_id`
-- Always uses system "transfer" category
+- `delete_transfer` finds and deletes both (pass either UUID)
+
+📖 **Full details:** [docs/rpc/transfers.md](./docs/rpc/transfers.md)
 
 ---
 
-### `delete_transfer`
+## 6. Recurring Transaction Management
 
-**Purpose:** Delete a transfer by soft-deleting both paired transactions.
+### Overview
 
-**Signature:**
-```sql
-CREATE OR REPLACE FUNCTION delete_transfer(
-  p_transaction_id uuid,
-  p_user_id uuid
-)
-RETURNS TABLE(
-  transactions_soft_deleted INT
-)
-```
+**RPCs:** 4 total (sync, create recurring transfer, delete single, delete paired)
 
-**Security:** `SECURITY DEFINER` (validates ownership)
+| Function | Purpose | Quick Signature |
+|----------|---------|-----------------|
+| `sync_recurring_transactions` | Generate pending transactions up to date | `(uuid, date) → (int, int)` |
+| `create_recurring_transfer` | Create paired recurring templates | `(uuid, uuid, uuid, numeric, ...) → (uuid, uuid)` |
+| `delete_recurring_transaction` | Soft-delete single template | `(uuid, uuid) → (bool, timestamptz)` |
+| `delete_recurring_and_pair` | Soft-delete both templates | `(uuid, uuid) → (int)` |
 
-**Behavior:**
-1. Validates `p_transaction_id` belongs to `p_user_id`
-2. Finds the paired transaction via `paired_transaction_id`
-3. Soft-deletes both transactions (sets `deleted_at`)
-4. Returns count (should be 2 for valid transfer)
-
-**Usage:**
+**Common Usage Pattern:**
 ```python
-# Python (via Supabase client)
-result = supabase_client.rpc(
-    'delete_transfer',
-    {
-        'p_transaction_id': either_transaction_uuid,  # Can be from or to transaction
-        'p_user_id': user_uuid
-    }
-).execute()
+# Sync pending recurring transactions
+result = supabase.rpc('sync_recurring_transactions', {
+    'p_user_id': user_uuid,
+    'p_today': '2025-11-15'  # ISO date
+}).execute()
+
+# Create recurring transfer
+result = supabase.rpc('create_recurring_transfer', {
+    'p_user_id': user_uuid,
+    'p_from_account_id': checking_uuid,
+    'p_to_account_id': savings_uuid,
+    'p_amount': 500.00,
+    'p_description': 'Monthly savings',
+    'p_frequency': 'monthly',
+    'p_interval': 1,
+    'p_start_date': '2025-12-01',
+    'p_end_date': None
+}).execute()
 ```
 
-**Notes:**
-- Can pass either transaction UUID (finds paired automatically)
-- Both transactions soft-deleted atomically
-- Account balances may need recomputation after this
-
----
-
-## Recurring Transaction RPCs
-
-### `sync_recurring_transactions`
-
-**Purpose:** Generate all pending transactions from recurring transaction templates up to a given date.
-
-**Signature:**
-```sql
-CREATE OR REPLACE FUNCTION sync_recurring_transactions(
-  p_user_id uuid,
-  p_today date
-)
-RETURNS TABLE(
-  transactions_generated INT,
-  rules_processed INT
-)
-```
-
-**Security:** `SECURITY DEFINER` (runs with creator privileges)
-
-**Behavior:**
-1. Fetches all active recurring rules for `p_user_id` where `next_run_date <= p_today`
-2. For each rule, generates transactions for all pending occurrences
-3. Inserts transactions with:
-   - `recurring_transaction_id` set to template UUID
-   - `system_generated_key = 'recurring_sync'`
-   - `date` set to scheduled occurrence date
-4. Updates `next_run_date` on each template to next future occurrence
-5. Respects `end_date` constraint (stops generating when reached)
-6. Returns count of transactions generated and rules processed
-
-**Usage:**
-```python
-# Python (via Supabase client)
-result = supabase_client.rpc(
-    'sync_recurring_transactions',
-    {
-        'p_user_id': user_uuid,
-        'p_today': '2025-11-15'  # ISO date string
-    }
-).execute()
-```
-
-**Notes:**
-- Should be called daily by backend scheduler
+**Key Details:**
+- `sync_recurring_transactions` should be called daily by scheduler
 - Idempotent: safe to call multiple times for same date
-- Handles daily, weekly, monthly, yearly frequencies
+- Supports: daily, weekly, monthly, yearly frequencies
 - Generated transactions marked with `system_generated_key = 'recurring_sync'`
 
----
-
-### `create_recurring_transfer`
-
-**Purpose:** Create a recurring transfer template (two paired recurring transaction templates).
-
-**Signature:**
-```sql
-CREATE OR REPLACE FUNCTION create_recurring_transfer(
-  p_user_id uuid,
-  p_from_account_id uuid,
-  p_to_account_id uuid,
-  p_amount numeric(12,2),
-  p_description text,
-  p_frequency recurring_frequency_enum,
-  p_interval integer,
-  p_start_date date,
-  p_end_date date
-)
-RETURNS TABLE(
-  from_recurring_id uuid,
-  to_recurring_id uuid
-)
-```
-
-**Security:** `SECURITY DEFINER` (validates accounts belong to `user_id`)
-
-**Behavior:**
-1. Validates both accounts belong to `p_user_id`
-2. Creates "outcome" recurring template for `p_from_account_id`
-3. Creates "income" recurring template for `p_to_account_id`
-4. Links templates via `paired_recurring_transaction_id`
-5. Sets `next_run_date = p_start_date` for both
-6. Returns both recurring template UUIDs
-
-**Usage:**
-```python
-# Python (via Supabase client)
-result = supabase_client.rpc(
-    'create_recurring_transfer',
-    {
-        'p_user_id': user_uuid,
-        'p_from_account_id': checking_uuid,
-        'p_to_account_id': savings_uuid,
-        'p_amount': 500.00,
-        'p_description': 'Monthly savings transfer',
-        'p_frequency': 'monthly',
-        'p_interval': 1,
-        'p_start_date': '2025-12-01',
-        'p_end_date': None  # Optional
-    }
-).execute()
-```
-
-**Notes:**
-- Creates paired templates for recurring transfers
-- `sync_recurring_transactions` will generate paired transactions automatically
-- Both templates marked as `is_active = true` by default
+📖 **Full details:** [docs/rpc/recurring.md](./docs/rpc/recurring.md)
 
 ---
 
-### `delete_recurring_transaction`
+## 7. Wishlist Management
 
-**Purpose:** Soft-delete a recurring transaction template (stops future generation).
+### Overview
 
-**Signature:**
-```sql
-CREATE OR REPLACE FUNCTION delete_recurring_transaction(
-  p_recurring_id uuid,
-  p_user_id uuid
-)
-RETURNS TABLE(
-  recurring_soft_deleted BOOLEAN,
-  deleted_at TIMESTAMPTZ
-)
-```
+**RPCs:** 1 total (create with items atomically)
 
-**Security:** `SECURITY DEFINER` (validates ownership)
+| Function | Purpose | Quick Signature |
+|----------|---------|-----------------|
+| `create_wishlist_with_items` | Create wishlist + add items atomically | `(uuid, text, jsonb) → (uuid, int)` |
 
-**Behavior:**
-1. Validates `p_recurring_id` belongs to `p_user_id`
-2. Sets `deleted_at = now()` on the recurring template
-3. Returns soft-delete status and timestamp
-
-**Usage:**
+**Common Usage Pattern:**
 ```python
-# Python (via Supabase client)
-result = supabase_client.rpc(
-    'delete_recurring_transaction',
-    {
-        'p_recurring_id': recurring_uuid,
-        'p_user_id': user_uuid
-    }
-).execute()
+result = supabase.rpc('create_wishlist_with_items', {
+    'p_user_id': user_uuid,
+    'p_name': 'Tech purchases 2025',
+    'p_items': [
+        {
+            'description': 'Gaming laptop',
+            'estimated_price': 1200.00,
+            'priority': 'high',
+            'url': 'https://example.com/laptop'
+        }
+    ]
+}).execute()
 ```
 
-**Notes:**
-- Template becomes inactive (no future transactions generated)
-- Already-generated transactions remain untouched
-- Does NOT soft-delete paired template (use `delete_recurring_and_pair` for transfers)
-
----
-
-### `delete_recurring_and_pair`
-
-**Purpose:** Soft-delete a recurring template AND its paired template (for recurring transfers).
-
-**Signature:**
-```sql
-CREATE OR REPLACE FUNCTION delete_recurring_and_pair(
-  p_recurring_id uuid,
-  p_user_id uuid
-)
-RETURNS TABLE(
-  recurring_templates_soft_deleted INT
-)
-```
-
-**Security:** `SECURITY DEFINER` (validates ownership)
-
-**Behavior:**
-1. Validates `p_recurring_id` belongs to `p_user_id`
-2. Finds paired template via `paired_recurring_transaction_id`
-3. Soft-deletes both templates (sets `deleted_at`)
-4. Returns count (should be 2 for valid paired templates)
-
-**Usage:**
-```python
-# Python (via Supabase client)
-result = supabase_client.rpc(
-    'delete_recurring_and_pair',
-    {
-        'p_recurring_id': either_recurring_uuid,  # Can be from or to template
-        'p_user_id': user_uuid
-    }
-).execute()
-```
-
-**Notes:**
-- Can pass either template UUID (finds paired automatically)
-- Both templates soft-deleted atomically
-- Already-generated transactions remain
-
----
-
-## Wishlist RPCs
-
-### `create_wishlist_with_items`
-
-**Purpose:** Atomically create a wishlist and add initial items.
-
-**Signature:**
-```sql
-CREATE OR REPLACE FUNCTION create_wishlist_with_items(
-  p_user_id uuid,
-  p_name text,
-  p_items jsonb
-)
-RETURNS TABLE(
-  wishlist_id uuid,
-  items_created INT
-)
-```
-
-**Security:** `SECURITY DEFINER` (validates ownership)
-
-**Behavior:**
-1. Inserts wishlist row for `p_user_id` with `p_name`
-2. Parses `p_items` JSONB array and inserts each item
-3. Returns wishlist UUID and count of items created
-
-**Input Format (p_items):**
-```json
-[
-  {
-    "description": "Gaming laptop",
-    "estimated_price": 1200.00,
-    "priority": "high",
-    "url": "https://example.com/laptop"
-  },
-  {
-    "description": "Wireless headphones",
-    "estimated_price": 150.00,
-    "priority": "medium"
-  }
-]
-```
-
-**Usage:**
-```python
-# Python (via Supabase client)
-result = supabase_client.rpc(
-    'create_wishlist_with_items',
-    {
-        'p_user_id': user_uuid,
-        'p_name': 'Tech purchases 2025',
-        'p_items': [
-            {
-                'description': 'Gaming laptop',
-                'estimated_price': 1200.00,
-                'priority': 'high',
-                'url': 'https://example.com/laptop'
-            }
-        ]
-    }
-).execute()
-```
-
-**Notes:**
-- All items inserted atomically with wishlist creation
+**Key Details:**
+- All items inserted atomically with wishlist
 - `wishlist_item` has FK cascade on wishlist deletion
 
+📖 **Full details:** [docs/rpc/wishlists.md](./docs/rpc/wishlists.md)
+
 ---
 
-## Soft-Delete RPCs
+## 8. Invoice Management
 
-### `delete_invoice`
+### Overview
 
-**Purpose:** Soft-delete an invoice (set `deleted_at` timestamp).
+**RPCs:** 1 total (soft-delete)
 
-**Signature:**
-```sql
-CREATE OR REPLACE FUNCTION delete_invoice(
-  p_invoice_id uuid,
-  p_user_id uuid
-)
-RETURNS TABLE(
-  invoice_soft_deleted BOOLEAN,
-  deleted_at TIMESTAMPTZ
-)
-```
+| Function | Purpose | Quick Signature |
+|----------|---------|-----------------|
+| `delete_invoice` | Soft-delete invoice (set deleted_at) | `(uuid, uuid) → (bool, timestamptz)` |
 
-**Security:** `SECURITY DEFINER` (validates ownership via `user_id`)
-
-**Behavior:**
-1. Validates `p_invoice_id` belongs to `p_user_id`
-2. Sets `deleted_at = now()` on the invoice
-3. Returns soft-delete status and timestamp
-
-**Usage:**
+**Common Usage Pattern:**
 ```python
-# Python (via Supabase client)
-result = supabase_client.rpc(
-    'delete_invoice',
-    {
-        'p_invoice_id': invoice_uuid,
-        'p_user_id': user_uuid
-    }
-).execute()
+result = supabase.rpc('delete_invoice', {
+    'p_invoice_id': invoice_uuid,
+    'p_user_id': user_uuid
+}).execute()
 ```
 
-**Notes:**
-- Invoice becomes invisible to user queries (RLS filters `deleted_at IS NULL`)
-- Storage cleanup (invoice image/PDF) should be handled by backend service layer after successful soft-delete
-- Related transactions remain intact (invoice_id FK is SET NULL on soft-delete)
+**Key Details:**
+- Invoice becomes invisible (RLS filters `deleted_at IS NULL`)
+- Storage cleanup should be handled by backend service layer
+- Related transactions remain intact
+
+📖 **Full details:** [docs/rpc/invoices.md](./docs/rpc/invoices.md)
 
 ---
 
-### `delete_budget`
+## 9. Budget Management
 
-**Purpose:** Soft-delete a budget (set `deleted_at` timestamp).
+### Overview
 
-**Signature:**
-```sql
-CREATE OR REPLACE FUNCTION delete_budget(
-  p_budget_id uuid,
-  p_user_id uuid
-)
-RETURNS TABLE(
-  budget_soft_deleted BOOLEAN,
-  deleted_at TIMESTAMPTZ
-)
-```
+**RPCs:** 2 total (soft-delete, recompute consumption)
 
-**Security:** `SECURITY DEFINER` (validates ownership via `user_id`)
+| Function | Purpose | Quick Signature |
+|----------|---------|-----------------|
+| `delete_budget` | Soft-delete budget | `(uuid, uuid) → (bool, timestamptz)` |
+| `recompute_budget_consumption` | Recalculate cached consumption for period | `(uuid, uuid, date, date) → numeric(12,2)` |
 
-**Behavior:**
-1. Validates `p_budget_id` belongs to `p_user_id`
-2. Sets `deleted_at = now()` on the budget
-3. Returns soft-delete status and timestamp
-
-**Usage:**
+**Common Usage Pattern:**
 ```python
-# Python (via Supabase client)
-result = supabase_client.rpc(
-    'delete_budget',
-    {
-        'p_budget_id': budget_uuid,
-        'p_user_id': user_uuid
-    }
-).execute()
+# Delete budget
+result = supabase.rpc('delete_budget', {
+    'p_budget_id': budget_uuid,
+    'p_user_id': user_uuid
+}).execute()
+
+# Recompute consumption
+result = supabase.rpc('recompute_budget_consumption', {
+    'p_budget_id': budget_uuid,
+    'p_user_id': user_uuid,
+    'p_period_start': '2025-11-01',
+    'p_period_end': '2025-11-30'
+}).execute()
+
+consumption = result.data  # numeric value
 ```
 
-**Notes:**
-- Budget becomes invisible to user queries (RLS filters `deleted_at IS NULL`)
-- `budget_category` junction rows remain for historical analysis
-- Transactions remain unaffected (budget deletion doesn't affect historical spending data)
-
----
-
-### `delete_account_soft_delete` (DEPRECATED)
-
-**Status:** DEPRECATED as of Nov 15, 2025
-
-**Purpose:** Standalone soft-delete function (superseded by `delete_account_reassign` and `delete_account_cascade`).
-
-**Migration Note:**
-This RPC is deprecated. Use:
-- `delete_account_reassign` for reassignment strategy
-- `delete_account_cascade` for cascade strategy
-
-Both new RPCs perform soft-delete (set `deleted_at`) instead of physical deletion.
-
----
-
-## Cache Recomputation RPCs
-
-### `recompute_account_balance`
-
-**Purpose:** Recalculate `account.cached_balance` from transaction history.
-
-**Signature:**
-```sql
-CREATE OR REPLACE FUNCTION recompute_account_balance(
-  p_account_id uuid,
-  p_user_id uuid
-)
-RETURNS numeric(12,2)
-```
-
-**Security:** `SECURITY DEFINER` (validates ownership via `user_id`)
-
-**Behavior:**
-1. Validates `p_account_id` belongs to `p_user_id`
-2. Sums all non-deleted transactions for the account:
-   - `income` transactions: positive contribution (+amount)
-   - `outcome` transactions: negative contribution (-amount)
-3. Updates `account.cached_balance` with the computed sum
-4. Returns the new balance
-
-**Usage:**
-```python
-# Python (via Supabase client)
-result = supabase_client.rpc(
-    'recompute_account_balance',
-    {
-        'p_account_id': account_uuid,
-        'p_user_id': user_uuid
-    }
-).execute()
-
-new_balance = result.data  # Returns numeric value
-```
-
-**When to Call:**
-- After bulk transaction reassignment (`delete_account_reassign`)
-- After soft-deleting transactions
-- After restoring soft-deleted transactions
-- Periodic cache verification (recommended: daily background job)
-
-**Notes:**
-- Only counts transactions where `deleted_at IS NULL`
-- Updates `account.updated_at` timestamp
-- Atomic operation (transaction-safe)
-
----
-
-### `recompute_budget_consumption`
-
-**Purpose:** Recalculate `budget.cached_consumption` for a given budget period.
-
-**Signature:**
-```sql
-CREATE OR REPLACE FUNCTION recompute_budget_consumption(
-  p_budget_id uuid,
-  p_user_id uuid,
-  p_period_start date,
-  p_period_end date
-)
-RETURNS numeric(12,2)
-```
-
-**Security:** `SECURITY DEFINER` (validates ownership via `user_id`)
-
-**Behavior:**
-1. Validates `p_budget_id` belongs to `p_user_id`
-2. Validates date range (`p_period_start` <= `p_period_end`)
-3. Fetches all categories linked to budget via `budget_category` junction
-4. Sums all non-deleted **OUTCOME** transactions in those categories within date range
-5. Updates `budget.cached_consumption` with the computed sum
-6. Returns the new consumption amount
-
-**Usage:**
-```python
-# Python (via Supabase client)
-result = supabase_client.rpc(
-    'recompute_budget_consumption',
-    {
-        'p_budget_id': budget_uuid,
-        'p_user_id': user_uuid,
-        'p_period_start': '2025-11-01',
-        'p_period_end': '2025-11-30'
-    }
-).execute()
-
-new_consumption = result.data  # Returns numeric value
-```
-
-**When to Call:**
-- After soft-deleting transactions that affect budget categories
-- When budget period rolls over (start of new month/week/year)
-- After changing budget category associations via `budget_category` updates
-- Periodic cache verification (recommended: daily background job)
-
-**Notes:**
-- Only counts transactions where `flow_type = 'outcome'` (expenses only)
-- Only counts transactions where `deleted_at IS NULL`
+**Key Details:**
+- `delete_budget` keeps `budget_category` junction for audit
+- `recompute_budget_consumption` only sums **outcome** transactions
 - Date range is inclusive: `[p_period_start, p_period_end]`
-- Updates `budget.updated_at` timestamp
-- Atomic operation (transaction-safe)
+
+📖 **Full details:** [docs/rpc/budgets.md](./docs/rpc/budgets.md)
 
 ---
 
-## RPC Usage Guidelines
+## 10. Cache Recomputation
 
-### General Principles
+### Overview
 
-1. **Always pass `user_id`**
-   - All RPCs validate ownership via `user_id` parameter
-   - Extract `user_id` from Supabase Auth token (`auth.uid()`)
-   - Never allow client to set `user_id` arbitrarily
+**RPCs:** 2 total (account balance, budget consumption)
 
-2. **Use SECURITY DEFINER carefully**
-   - All RPCs run with creator privileges (`SECURITY DEFINER`)
-   - They bypass RLS internally but validate `user_id` explicitly
-   - Never expose raw table access to users
+**Cached Fields:**
+- `account.cached_balance` — Sum of all account transactions
+- `budget.cached_consumption` — Sum of category transactions in period
 
-3. **Atomicity**
-   - All RPCs wrap operations in single DB transaction
-   - Either all changes succeed or all fail (rollback)
-   - No partial state possible
-
-4. **Error Handling**
-   - RPCs raise `EXCEPTION` on validation failure
-   - Backend should catch and convert to HTTP 400/403/404
-   - Log errors but don't expose internal details to client
-
-### Soft-Delete vs Hard-Delete
-
-**Soft-Delete (Current Strategy):**
-- Used for: accounts, transactions, invoices, budgets, recurring templates
-- Mechanism: Set `deleted_at = now()`
-- Visibility: RLS filters `WHERE deleted_at IS NULL`
-- Recovery: Set `deleted_at = NULL` to restore
-- Audit: All historical data preserved
-
-**Hard-Delete:**
-- Used for: categories (user categories only), wishlists, wishlist items
-- Mechanism: Physical `DELETE FROM ...`
-- Rationale: Simpler data with no audit requirements
-- No recovery possible
-
-### Cache Management
-
-**Current Cached Fields:**
-- `account.cached_balance` - Sum of all transactions
-- `budget.cached_consumption` - Sum of category transactions in period
-
-**When to Recompute:**
+**When to Call:**
 - After bulk reassignment operations
 - After soft-deleting transactions
 - After restoring soft-deleted data
-- Periodic verification (recommended: daily)
+- Periodic verification (recommended: daily background job)
 
-**Future: Triggers vs Explicit Calls**
-- Option 1: DB triggers on transaction INSERT/UPDATE/DELETE
-- Option 2: Explicit RPC calls after operations
-- Current: Manual explicit calls (Option 2)
-- Consider triggers for automatic cache updates
+| Function | Purpose | Quick Signature |
+|----------|---------|-----------------|
+| `recompute_account_balance` | Recalculate account balance from transactions | `(uuid, uuid) → numeric(12,2)` |
+| `recompute_budget_consumption` | Recalculate budget consumption for period | `(uuid, uuid, date, date) → numeric(12,2)` |
 
-### Testing RPCs
-
-**Test Coverage Required:**
-- Happy path: valid inputs, successful operation
-- Ownership validation: reject wrong `user_id`
-- Edge cases: empty results, zero amounts, null fields
-- Atomic rollback: verify transaction consistency
-- RLS enforcement: verify soft-deleted rows invisible
-
-**Example Test Pattern:**
+**Common Usage Pattern:**
 ```python
-import pytest
-from unittest.mock import MagicMock
+# Recompute account balance
+result = supabase.rpc('recompute_account_balance', {
+    'p_account_id': account_uuid,
+    'p_user_id': user_uuid
+}).execute()
 
-def test_delete_account_reassign_success():
-    mock_client = MagicMock()
-    mock_client.rpc.return_value.execute.return_value = MockResponse(
-        data=[{
-            'recurring_templates_reassigned': 3,
-            'transactions_reassigned': 15,
-            'account_soft_deleted': True,
-            'deleted_at': '2025-11-15T10:30:00Z'
-        }]
-    )
-    
-    result = call_rpc(mock_client, 'delete_account_reassign', {...})
-    
-    assert result['transactions_reassigned'] == 15
-    assert result['account_soft_deleted'] is True
+new_balance = result.data  # numeric value
 ```
 
----
+**Key Details:**
+- Only counts transactions where `deleted_at IS NULL`
+- Updates `updated_at` timestamp on affected row
+- Atomic operation (transaction-safe)
 
-## Migration File Reference
-
-All RPCs are defined in versioned SQL migration files under `supabase/migrations/`:
-
-| RPC Function | Migration File | Date Created |
-|:-------------|:---------------|:-------------|
-| `delete_account_reassign` | `20251115000001_delete_account_reassign.sql` | Nov 15, 2025 |
-| `delete_account_cascade` | `20251115000002_delete_account_cascade.sql` | Nov 15, 2025 |
-| `delete_transaction` | `20251115000004_delete_transaction_rpc.sql` | Nov 15, 2025 |
-| `delete_recurring_transaction` | `20251115000005_delete_recurring_transaction_rpc.sql` | Nov 15, 2025 |
-| `sync_recurring_transactions` | `20251106000001_sync_recurring_transactions_function.sql` | Nov 6, 2025 |
-| `delete_category_reassign` | `20251107000010_delete_category_reassign_flow_aware.sql` | Nov 7, 2025 |
-| `delete_recurring_and_pair` | `20251107000002_delete_recurring_transaction_and_pair.sql` | Nov 7, 2025 |
-| `create_transfer` | `20251107000004_create_transfer_rpc.sql` | Nov 7, 2025 |
-| `create_recurring_transfer` | `20251107000005_create_recurring_transfer_rpc.sql` | Nov 7, 2025 |
-| `delete_transfer` | `20251107000008_delete_transfer_rpc.sql` | Nov 7, 2025 |
-| `create_wishlist_with_items` | `20251107000009_create_wishlist_with_items_rpc.sql` | Nov 7, 2025 |
-| `delete_invoice` | `20251116000001_delete_invoice_rpc.sql` | Nov 16, 2025 |
-| `delete_budget` | `20251116000002_delete_budget_rpc.sql` | Nov 16, 2025 |
-| `recompute_account_balance` | `20251116000003_recompute_account_balance_rpc.sql` | Nov 16, 2025 |
-| `recompute_budget_consumption` | `20251116000004_recompute_budget_consumption_rpc.sql` | Nov 16, 2025 |
+📖 **Full details:** [docs/rpc/guidelines.md](./docs/rpc/guidelines.md)
 
 ---
 
-## Summary
+## 11. Currency Validation
 
-**Total Active RPCs: 16**
-- Account management: 2
-- Transaction management: 1
-- Category management: 1
-- Transfer management: 2
-- Recurring transactions: 4
-- Wishlist: 1
-- Soft-delete: 3 (2 active + 1 DEPRECATED)
-- Cache recomputation: 2
+### Overview
+
+**RPCs:** 3 total (validate, get, check if changeable)
+
+| Function | Purpose | Quick Signature |
+|----------|---------|-----------------|
+| `validate_user_currency` | Validate currency matches profile | `(uuid, text) → bool` |
+| `get_user_currency` | Get user's currency preference | `(uuid) → text` |
+| `can_change_user_currency` | Check if currency can be changed | `(uuid) → bool` |
+
+**Enforces single-currency-per-user policy.**
+
+**Common Usage Pattern:**
+```python
+# Validate currency
+try:
+    supabase.rpc('validate_user_currency', {
+        'p_user_id': user_uuid,
+        'p_currency': 'USD'
+    }).execute()
+except Exception as e:
+    if "Currency mismatch" in str(e):
+        raise ValueError("Currency doesn't match profile")
+
+# Get user's currency
+result = supabase.rpc('get_user_currency', {
+    'p_user_id': user_uuid
+}).execute()
+currency = result.data  # e.g., "GTQ"
+
+# Check if currency can be changed
+result = supabase.rpc('can_change_user_currency', {
+    'p_user_id': user_uuid
+}).execute()
+can_change = result.data  # bool
+```
+
+**Key Details:**
+- `can_change_user_currency` returns false if user has accounts, wishlists, or budgets
+- Enforces single currency across all financial data
+
+📖 **Full details:** [docs/rpc/currency.md](./docs/rpc/currency.md)
 
 ---
 
-**Last Updated:** November 16, 2025  
+## 12. Favorite Account Management
+
+### Overview
+
+**RPCs:** 3 total (set, clear, get)
+
+| Function | Purpose | Quick Signature |
+|----------|---------|-----------------|
+| `set_favorite_account` | Set account as favorite (1 per user) | `(uuid, uuid) → (uuid, uuid, bool)` |
+| `clear_favorite_account` | Clear favorite status | `(uuid, uuid) → (bool)` |
+| `get_favorite_account` | Get user's favorite account | `(uuid) → uuid or NULL` |
+
+**Used for auto-selecting account in manual transaction creation.**
+
+**Common Usage Pattern:**
+```python
+# Set favorite
+result = supabase.rpc('set_favorite_account', {
+    'p_account_id': account_uuid,
+    'p_user_id': user_uuid
+}).execute()
+row = result.data[0]
+# row['previous_favorite_id'] - previous favorite (or None)
+# row['new_favorite_id'] - newly favorited account
+# row['success'] - always True if no exception
+
+# Get favorite
+result = supabase.rpc('get_favorite_account', {
+    'p_user_id': user_uuid
+}).execute()
+favorite_account_id = result.data  # UUID or None
+```
+
+**Key Details:**
+- Only one account per user can be favorite
+- Atomically unsets previous favorite when setting new one
+- Safe for concurrent calls
+- Returns `NULL` if no favorite set
+
+📖 **Full details:** [docs/rpc/favorites.md](./docs/rpc/favorites.md)
+
+---
+
+## 13. Engagement & Streak
+
+### Overview
+
+**RPCs:** 3 total (update after activity, get status, reset weekly freezes)
+
+| Function | Purpose | Quick Signature |
+|----------|---------|-----------------|
+| `update_user_streak` | Update streak after transaction/invoice | `(uuid) → (int, int, bool, bool, bool)` |
+| `get_user_streak` | Get streak status with risk assessment | `(uuid) → (int, int, date, bool, bool, int)` |
+| `reset_weekly_streak_freezes` | Reset all freezes (cron job only) | `() → int` |
+
+**Implements gamification: daily activity streaks with freeze protection.**
+
+**Common Usage Pattern:**
+```python
+# Update after transaction creation (non-blocking)
+try:
+    result = supabase.rpc('update_user_streak', {
+        'p_user_id': user_uuid
+    }).execute()
+    streak_data = result.data[0]
+    # {
+    #   'current_streak': 8,
+    #   'longest_streak': 14,
+    #   'streak_continued': True,
+    #   'streak_frozen': False,
+    #   'new_personal_best': False
+    # }
+except Exception:
+    logger.warning("Streak update failed, but transaction succeeded")
+
+# Get streak for display
+result = supabase.rpc('get_user_streak', {
+    'p_user_id': user_uuid
+}).execute()
+streak_status = result.data[0]
+# {
+#   'current_streak': 7,
+#   'longest_streak': 14,
+#   'last_activity_date': '2025-12-01',
+#   'streak_freeze_available': True,
+#   'streak_at_risk': False,
+#   'days_until_streak_break': 2
+# }
+```
+
+**Streak Mechanics:**
+- **First activity** → streak = 1
+- **Logged today** → no change
+- **Logged yesterday** → streak++
+- **Missed 1 day + freeze available** → use freeze, streak++
+- **Missed 1+ days + no freeze** → reset to 1
+
+**Key Details:**
+- `update_user_streak` called automatically after transactions/invoices
+- Non-blocking: transaction succeeds even if streak update fails
+- `reset_weekly_streak_freezes` called by pg_cron every Monday
+- All 5 profile streak fields updated atomically
+
+📖 **Full details:** [docs/rpc/engagement.md](./docs/rpc/engagement.md)
+
+---
+
+## Related Documentation
+
+- [`API-endpoints.md`](API-endpoints.md) — HTTP endpoints that call these RPCs
+- [`DB-documentation.md`](DB-documentation.md) — Database schema and RLS policies
+- [`docs/api/`](docs/api/) — Detailed API endpoint documentation
+- [`docs/db/`](docs/db/) — Detailed database documentation
+- [`docs/rpc/`](docs/rpc/) — Detailed RPC function documentation
+- [`DB-DDL.txt`](DB-DDL.txt) — Complete RPC function source code
+
+---
+
 **Maintainer:** Backend Team  
-**Related Docs:** 
-- `DB-DDL.txt` (schema definitions)
-- `API-endpoints.md` (HTTP API that calls these RPCs)
+**Last Updated:** December 1, 2025  
+**Pattern:** Progressive Disclosure (Anthropic pattern)
