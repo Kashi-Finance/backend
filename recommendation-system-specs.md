@@ -165,9 +165,8 @@ backend/
 All prompts are stored in a single file for simplicity:
 
 **`backend/agents/recommendation/prompts.py`**
-- `RECOMMENDATION_SYSTEM_PROMPT`: Defines LLM role, capabilities, and guardrails
-- `RECOMMENDATION_USER_PROMPT_TEMPLATE`: Template for user-specific context (legacy)
-- `build_recommendation_user_prompt()`: Function to build user prompt with XML tags
+- `RECOMMENDATION_SYSTEM_PROMPT`: Defines LLM role, capabilities, and guardrails (XML-structured)
+- `build_recommendation_user_prompt()`: Function to build user prompt with structured context
 
 The prompts follow Anthropic's best practices:
 - XML tags for structured content (`<role>`, `<instructions>`, `<examples>`, etc.)
