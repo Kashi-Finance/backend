@@ -400,6 +400,7 @@ consumption = result.data  # numeric value
 |----------|---------|-----------------|
 | `recompute_account_balance` | Recalculate account balance from transactions | `(uuid, uuid) → numeric(12,2)` |
 | `recompute_budget_consumption` | Recalculate budget consumption for period | `(uuid, uuid, date, date) → numeric(12,2)` |
+| `recompute_budgets_for_category` | Recalculate all budgets tracking a category | `(uuid, uuid) → TABLE(budget_id, budget_name, old_consumption, new_consumption)` |
 
 **Common Usage Pattern:**
 ```python
@@ -410,6 +411,13 @@ result = supabase.rpc('recompute_account_balance', {
 }).execute()
 
 new_balance = result.data  # numeric value
+
+# Recompute all budgets tracking a category (after transaction CRUD)
+result = supabase.rpc('recompute_budgets_for_category', {
+    'p_user_id': user_uuid,
+    'p_category_id': category_uuid
+}).execute()
+# Returns list of affected budgets with old/new consumption values
 ```
 
 **Key Details:**

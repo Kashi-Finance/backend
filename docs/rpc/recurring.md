@@ -8,7 +8,7 @@ Recurring transaction RPCs handle synchronization of recurring templates to gene
 
 ## `sync_recurring_transactions`
 
-**Purpose:** Generate all pending transactions from recurring transaction templates up to a given date.
+**Purpose:** Generate all pending transactions from recurring transaction templates up to a given date. Handles paired transfers, account balance updates, and budget consumption updates atomically.
 
 **Signature:**
 ```sql
@@ -18,22 +18,36 @@ CREATE OR REPLACE FUNCTION sync_recurring_transactions(
 )
 RETURNS TABLE(
   transactions_generated INT,
-  rules_processed INT
+  rules_processed INT,
+  accounts_updated INT,
+  budgets_updated INT
 )
 ```
 
 **Security:** `SECURITY DEFINER` (runs with creator privileges)
 
 **Behavior:**
+
+**Phase 1 - Generate Transactions:**
 1. Fetches all active recurring rules for `p_user_id` where `next_run_date <= p_today`
-2. For each rule, generates transactions for all pending occurrences
-3. Inserts transactions with:
-   - `recurring_transaction_id` set to template UUID
-   - `system_generated_key = 'recurring_sync'`
-   - `date` set to scheduled occurrence date
+2. For paired recurring transfers:
+   - Generates BOTH transactions linked via `paired_transaction_id`
+   - Tracks both accounts as affected
+   - Does NOT track transfer category for budget updates
+3. For standalone recurring transactions:
+   - Generates single transaction
+   - Tracks affected account
+   - Tracks affected category (outcome only) for budget updates
 4. Updates `next_run_date` on each template to next future occurrence
 5. Respects `end_date` constraint (stops generating when reached)
-6. Returns count of transactions generated and rules processed
+
+**Phase 2 - Update Account Balances:**
+- Recomputes `cached_balance` for each affected account (batch, once per account)
+
+**Phase 3 - Update Budget Consumption:**
+- Recomputes `cached_consumption` for budgets tracking affected categories
+- Only processes OUTCOME transactions (income doesn't consume budget)
+- Transfers do NOT affect budget consumption
 
 **Usage:**
 ```python
@@ -41,20 +55,24 @@ result = supabase_client.rpc(
     'sync_recurring_transactions',
     {
         'p_user_id': user_uuid,
-        'p_today': '2025-11-15'  # ISO date string
+        'p_today': '2025-12-04'
     }
 ).execute()
 
 row = result.data[0]
 # row['transactions_generated'] - total transactions created
-# row['rules_processed'] - number of templates checked
+# row['rules_processed'] - number of templates checked  
+# row['accounts_updated'] - accounts whose balance was recomputed
+# row['budgets_updated'] - budgets whose consumption was recomputed
 ```
 
 **Notes:**
-- Should be called daily by backend scheduler
+- Call from splash screen on app launch (recommended)
 - Idempotent: safe to call multiple times for same date
 - Handles daily, weekly, monthly, yearly frequencies
 - Generated transactions marked with `system_generated_key = 'recurring_sync'`
+- Paired transfers are linked via `paired_transaction_id`
+- All operations are atomic (single database transaction)
 
 ---
 
