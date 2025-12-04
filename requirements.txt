@@ -12,16 +12,12 @@ supabase==2.23.0
 PyJWT==2.10.1
 cryptography==46.0.3
 
-# Google ADK and Gemini SDK for Invoice Agent
-# ADK framework ONLY used for invoice extraction (not recommendations)
-google-adk>=1.0.0,<2.0.0
-# Using latest stable version of Gemini SDK for invoice OCR
+# Google Gemini SDK for Invoice Agent (single-shot multimodal OCR)
 google-genai>=1.41.0,<2.0.0
-websockets>=15.0.1,<16.0.0
 
-# OpenAI SDK for DeepSeek API (recommendations via Prompt Chaining)
-# DeepSeek uses OpenAI-compatible API format
-openai>=1.0.0,<2.0.0
+# Perplexity SDK for Recommendation Service (Sonar with native web grounding)
+# Provides web-grounded LLM responses for product recommendations
+perplexityai>=0.1.0
 
 # Logging and utilities
 python-dotenv==1.0.0
@@ -34,3 +30,4 @@ pytest-asyncio==0.24.0
 # Development dependencies (optional)
 # black==23.12.1
 # mypy==1.8.0
+
