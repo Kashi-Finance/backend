@@ -106,6 +106,11 @@ async def list_accounts(
                 name=_as_str(acc.get("name")),
                 type=acc.get("type", "cash"),  # type: ignore
                 currency=_as_str(acc.get("currency")),
+                icon=_as_str(acc.get("icon")),
+                color=_as_str(acc.get("color")),
+                is_favorite=bool(acc.get("is_favorite", False)),
+                is_pinned=bool(acc.get("is_pinned", False)),
+                description=acc.get("description"),
                 cached_balance=float(acc.get("cached_balance", 0)),
                 created_at=_as_str(acc.get("created_at")),
                 updated_at=_as_str(acc.get("updated_at")),
@@ -193,7 +198,12 @@ async def create_new_account(
             user_id=auth_user.user_id,
             name=request.name,
             account_type=request.type,
-            currency=request.currency
+            currency=request.currency,
+            icon=request.icon,
+            color=request.color,
+            is_favorite=request.is_favorite,
+            is_pinned=request.is_pinned,
+            description=request.description
         )
         
         account_id = created_account.get("id")
@@ -277,6 +287,11 @@ async def create_new_account(
             name=_as_str(created_account.get("name")),
             type=created_account.get("type", "cash"),  # type: ignore
             currency=_as_str(created_account.get("currency")),
+            icon=_as_str(created_account.get("icon")),
+            color=_as_str(created_account.get("color")),
+            is_favorite=bool(created_account.get("is_favorite", False)),
+            is_pinned=bool(created_account.get("is_pinned", False)),
+            description=created_account.get("description"),
             cached_balance=float(created_account.get("cached_balance", 0)),
             created_at=_as_str(created_account.get("created_at")),
             updated_at=_as_str(created_account.get("updated_at")),
@@ -290,6 +305,19 @@ async def create_new_account(
             message="Account created successfully"
         )
         
+    except ValueError as e:
+        # Currency validation error from service layer
+        logger.warning(f"Currency validation failed for user {auth_user.user_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "currency_mismatch",
+                "details": str(e)
+            }
+        )
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
         logger.error(f"Failed to create account for user {auth_user.user_id}: {e}", exc_info=True)
         raise HTTPException(
@@ -300,6 +328,187 @@ async def create_new_account(
             }
         )
 
+
+# --- Favorite Account Endpoints ---
+# NOTE: These routes MUST be defined before /{account_id} routes to prevent
+# "/favorite" being matched as an account_id parameter.
+
+from backend.services.account_service import (
+    set_favorite_account,
+    clear_favorite_account,
+    get_favorite_account,
+)
+from backend.schemas.accounts import (
+    SetFavoriteAccountRequest,
+    SetFavoriteAccountResponse,
+    ClearFavoriteAccountResponse,
+    GetFavoriteAccountResponse,
+)
+
+
+@router.get(
+    "/favorite",
+    response_model=GetFavoriteAccountResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get favorite account",
+    description="""
+    Get the user's favorite account ID.
+    
+    Returns null if no favorite is set.
+    
+    Security:
+    - Requires valid Authorization Bearer token
+    """
+)
+async def get_favorite(
+    auth_user: Annotated[AuthenticatedUser, Depends(get_authenticated_user)]
+) -> GetFavoriteAccountResponse:
+    """Get the user's favorite account ID."""
+    logger.debug(f"Getting favorite account for user {auth_user.user_id}")
+    
+    supabase_client = get_supabase_client(auth_user.access_token)
+    
+    try:
+        favorite_id = await get_favorite_account(
+            supabase_client=supabase_client,
+            user_id=auth_user.user_id
+        )
+        
+        return GetFavoriteAccountResponse(
+            status="OK",
+            favorite_account_id=favorite_id
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to get favorite account: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "server_error", "details": "Failed to get favorite account"}
+        )
+
+
+@router.post(
+    "/favorite",
+    response_model=SetFavoriteAccountResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Set favorite account",
+    description="""
+    Set an account as the user's favorite.
+    
+    The favorite account is auto-selected when creating manual transactions.
+    Only one account per user can be marked as favorite - setting a new 
+    favorite automatically clears the previous one.
+    
+    Security:
+    - Requires valid Authorization Bearer token
+    - Only the account owner can set their favorite
+    """
+)
+async def set_favorite(
+    request: SetFavoriteAccountRequest,
+    auth_user: Annotated[AuthenticatedUser, Depends(get_authenticated_user)]
+) -> SetFavoriteAccountResponse:
+    """Set an account as the user's favorite."""
+    logger.info(f"Setting favorite account {request.account_id} for user {auth_user.user_id}")
+    
+    supabase_client = get_supabase_client(auth_user.access_token)
+    
+    try:
+        result = await set_favorite_account(
+            supabase_client=supabase_client,
+            user_id=auth_user.user_id,
+            account_id=request.account_id
+        )
+        
+        previous_id = result.get('previous_favorite_id')
+        message = "Account set as favorite"
+        if previous_id and previous_id != request.account_id:
+            message = f"Account set as favorite (previous favorite cleared)"
+        elif result.get('new_favorite_id') == request.account_id:
+            message = "Account is now favorite"
+        
+        return SetFavoriteAccountResponse(
+            status="OK",
+            previous_favorite_id=previous_id,
+            new_favorite_id=result.get('new_favorite_id', request.account_id),
+            message=message
+        )
+        
+    except Exception as e:
+        error_msg = str(e)
+        if "not found" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": "not_found", "details": "Account not found"}
+            )
+        if "does not belong" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "forbidden", "details": "Account does not belong to user"}
+            )
+        
+        logger.error(f"Failed to set favorite account: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "server_error", "details": "Failed to set favorite account"}
+        )
+
+
+@router.delete(
+    "/favorite/{account_id}",
+    response_model=ClearFavoriteAccountResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Clear favorite account",
+    description="""
+    Clear the favorite status from an account.
+    
+    After clearing, no account will be marked as favorite until a new one is set.
+    
+    Security:
+    - Requires valid Authorization Bearer token
+    - Only the account owner can clear their favorite
+    """
+)
+async def clear_favorite(
+    account_id: Annotated[str, Path(description="Account UUID to clear favorite status from")],
+    auth_user: Annotated[AuthenticatedUser, Depends(get_authenticated_user)]
+) -> ClearFavoriteAccountResponse:
+    """Clear favorite status from an account."""
+    logger.info(f"Clearing favorite status from account {account_id} for user {auth_user.user_id}")
+    
+    supabase_client = get_supabase_client(auth_user.access_token)
+    
+    try:
+        was_cleared = await clear_favorite_account(
+            supabase_client=supabase_client,
+            user_id=auth_user.user_id,
+            account_id=account_id
+        )
+        
+        message = "Favorite status cleared" if was_cleared else "Account was not favorite"
+        
+        return ClearFavoriteAccountResponse(
+            status="OK",
+            cleared=was_cleared,
+            message=message
+        )
+        
+    except Exception as e:
+        error_msg = str(e)
+        if "not found" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": "not_found", "details": "Account not found"}
+            )
+        
+        logger.error(f"Failed to clear favorite account: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "server_error", "details": "Failed to clear favorite account"}
+        )
+
+
+# --- Account CRUD by ID (dynamic routes below) ---
 
 @router.get(
     "/{account_id}",
@@ -353,6 +562,11 @@ async def get_account(
             name=_as_str(account.get("name")),
             type=account.get("type", "cash"),  # type: ignore
             currency=_as_str(account.get("currency")),
+            icon=_as_str(account.get("icon")),
+            color=_as_str(account.get("color")),
+            is_favorite=bool(account.get("is_favorite", False)),
+            is_pinned=bool(account.get("is_pinned", False)),
+            description=account.get("description"),
             cached_balance=float(account.get("cached_balance", 0)),
             created_at=_as_str(account.get("created_at")),
             updated_at=_as_str(account.get("updated_at")),
@@ -438,6 +652,11 @@ async def update_existing_account(
             name=_as_str(updated_account.get("name")),
             type=updated_account.get("type", "cash"),  # type: ignore
             currency=_as_str(updated_account.get("currency")),
+            icon=_as_str(updated_account.get("icon")),
+            color=_as_str(updated_account.get("color")),
+            is_favorite=bool(updated_account.get("is_favorite", False)),
+            is_pinned=bool(updated_account.get("is_pinned", False)),
+            description=updated_account.get("description"),
             cached_balance=float(updated_account.get("cached_balance", 0)),
             created_at=_as_str(updated_account.get("created_at")),
             updated_at=_as_str(updated_account.get("updated_at")),
@@ -451,6 +670,16 @@ async def update_existing_account(
             message="Account updated successfully"
         )
         
+    except ValueError as e:
+        # Currency change attempt blocked by service layer
+        logger.warning(f"Account update blocked for {account_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "currency_change_blocked",
+                "details": str(e)
+            }
+        )
     except HTTPException:
         raise
     except Exception as e:

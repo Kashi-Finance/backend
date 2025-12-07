@@ -98,7 +98,12 @@ async def create_account(
     user_id: str,
     name: str,
     account_type: str,
-    currency: str
+    currency: str,
+    icon: str,
+    color: str,
+    is_favorite: bool = False,
+    is_pinned: bool = False,
+    description: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Create a new account.
@@ -108,25 +113,55 @@ async def create_account(
         user_id: The authenticated user's ID
         name: Human-readable account name
         account_type: Account type (cash, bank, credit_card, etc.)
-        currency: ISO currency code
+        currency: ISO currency code (must match profile.currency_preference)
+        icon: Icon identifier for UI display
+        color: Hex color code for UI display (e.g., '#FF5733')
+        is_favorite: If true, set as user's favorite account (clears previous favorite)
+        is_pinned: If true, pin account to top of list
+        description: Optional description for the account
     
     Returns:
         The created account dict
     
+    Raises:
+        ValueError: If currency doesn't match user's profile.currency_preference
+    
     Security:
         - RLS enforces user_id = auth.uid()
         - User can only create accounts for themselves
+        - Single-currency-per-user policy enforced
     """
+    # Validate currency matches user's profile (single-currency-per-user policy)
+    try:
+        supabase_client.rpc(
+            'validate_user_currency',
+            {'p_user_id': user_id, 'p_currency': currency}
+        ).execute()
+    except Exception as e:
+        error_msg = str(e)
+        if "Currency mismatch" in error_msg:
+            raise ValueError(
+                f"Currency '{currency}' does not match your profile currency. "
+                "All accounts must use the same currency as your profile."
+            )
+        raise
+    
     account_data = {
         "user_id": user_id,
         "name": name,
         "type": account_type,
-        "currency": currency
+        "currency": currency,
+        "icon": icon,
+        "color": color.upper(),  # Normalize to uppercase hex
+        "is_favorite": False,  # Will be set via RPC if requested
+        "is_pinned": is_pinned,
+        "description": description
     }
     
     logger.info(
         f"Creating account for user {user_id}: "
-        f"name='{name}', type={account_type}, currency={currency}"
+        f"name='{name}', type={account_type}, currency={currency}, "
+        f"icon={icon}, color={color}, is_pinned={is_pinned}"
     )
     
     result = supabase_client.table("account").insert(account_data).execute()
@@ -136,6 +171,16 @@ async def create_account(
     
     created_account: Dict[str, Any] = cast(Dict[str, Any], result.data[0])
     logger.info(f"Account created successfully: {created_account['id']}")
+    
+    # If is_favorite requested, use RPC to safely set it (clears previous favorite)
+    if is_favorite:
+        try:
+            await set_favorite_account(supabase_client, user_id, created_account['id'])
+            # Refresh account data to get updated is_favorite status
+            created_account['is_favorite'] = True
+        except Exception as e:
+            logger.warning(f"Failed to set account {created_account['id']} as favorite: {e}")
+            # Account was created, just couldn't set favorite - not critical
     
     return created_account
 
@@ -153,15 +198,39 @@ async def update_account(
         supabase_client: Authenticated Supabase client
         user_id: The authenticated user's ID
         account_id: The account UUID to update
-        **updates: Fields to update (name, type, currency)
+        **updates: Fields to update (name, type, icon, color, is_pinned, description)
+                   - currency cannot be changed (single-currency-per-user policy)
+                   - is_favorite should be managed via set_favorite_account RPC
     
     Returns:
         The updated account dict, or None if not found
     
+    Raises:
+        ValueError: If attempting to change currency (not allowed under single-currency policy)
+    
     Security:
         - RLS enforces user_id = auth.uid()
         - User can only update their own accounts
+        - Currency changes are blocked (single-currency-per-user policy)
     """
+    # Block currency changes - single-currency-per-user policy
+    if 'currency' in updates:
+        raise ValueError(
+            "Currency cannot be changed after account creation. "
+            "All accounts must use the same currency as your profile."
+        )
+    
+    # Block direct is_favorite changes - must use RPC for data integrity
+    if 'is_favorite' in updates:
+        raise ValueError(
+            "is_favorite cannot be changed directly. "
+            "Use the set_favorite_account or clear_favorite_account endpoints."
+        )
+    
+    # Normalize color to uppercase if provided
+    if 'color' in updates and updates['color']:
+        updates['color'] = updates['color'].upper()
+    
     logger.info(f"Updating account {account_id} for user {user_id}: {list(updates.keys())}")
     
     result = (
@@ -376,3 +445,132 @@ async def recompute_account_balance(
     except Exception as e:
         logger.error(f"Failed to recompute balance for account {account_id}: {e}")
         raise
+
+
+# --- Favorite Account Management ---
+
+async def set_favorite_account(
+    supabase_client: Client,
+    user_id: str,
+    account_id: str
+) -> Dict[str, Any]:
+    """
+    Set an account as the user's favorite.
+    
+    Uses RPC to safely toggle favorite status, ensuring only one account
+    per user can be marked as favorite at a time.
+    
+    Args:
+        supabase_client: Authenticated Supabase client
+        user_id: The authenticated user's ID
+        account_id: The account UUID to set as favorite
+    
+    Returns:
+        Dict with previous_favorite_id, new_favorite_id, and success
+    
+    Raises:
+        Exception: If RPC call fails or account doesn't exist/belong to user
+    
+    Security:
+        - RPC validates account belongs to user_id
+        - Atomic operation prevents race conditions
+    """
+    logger.info(f"Setting account {account_id} as favorite for user {user_id}")
+    
+    result = supabase_client.rpc(
+        'set_favorite_account',
+        {
+            'p_account_id': account_id,
+            'p_user_id': user_id
+        }
+    ).execute()
+    
+    if not result.data or not isinstance(result.data, list) or len(result.data) == 0:
+        raise Exception("RPC set_favorite_account failed: no data returned")
+    
+    rpc_result = cast(Dict[str, Any], result.data[0])
+    
+    previous_id = rpc_result.get('previous_favorite_id')
+    if previous_id:
+        logger.info(f"Cleared previous favorite account {previous_id}")
+    
+    logger.info(f"Account {account_id} is now favorite for user {user_id}")
+    
+    return rpc_result
+
+
+async def clear_favorite_account(
+    supabase_client: Client,
+    user_id: str,
+    account_id: str
+) -> bool:
+    """
+    Clear the favorite status from an account.
+    
+    Args:
+        supabase_client: Authenticated Supabase client
+        user_id: The authenticated user's ID
+        account_id: The account UUID to clear favorite status from
+    
+    Returns:
+        True if the account was favorite and is now cleared, False if it wasn't favorite
+    
+    Raises:
+        Exception: If RPC call fails or account doesn't exist/belong to user
+    """
+    logger.info(f"Clearing favorite status from account {account_id} for user {user_id}")
+    
+    result = supabase_client.rpc(
+        'clear_favorite_account',
+        {
+            'p_account_id': account_id,
+            'p_user_id': user_id
+        }
+    ).execute()
+    
+    if not result.data or not isinstance(result.data, list) or len(result.data) == 0:
+        raise Exception("RPC clear_favorite_account failed: no data returned")
+    
+    rpc_result = cast(Dict[str, Any], result.data[0])
+    was_cleared = bool(rpc_result.get('cleared', False))
+    
+    if was_cleared:
+        logger.info(f"Favorite status cleared from account {account_id}")
+    else:
+        logger.info(f"Account {account_id} was not favorite, no change needed")
+    
+    return was_cleared
+
+
+async def get_favorite_account(
+    supabase_client: Client,
+    user_id: str
+) -> Optional[str]:
+    """
+    Get the UUID of the user's favorite account.
+    
+    Args:
+        supabase_client: Authenticated Supabase client
+        user_id: The authenticated user's ID
+    
+    Returns:
+        UUID of the favorite account, or None if no favorite is set
+    """
+    logger.debug(f"Getting favorite account for user {user_id}")
+    
+    result = supabase_client.rpc(
+        'get_favorite_account',
+        {'p_user_id': user_id}
+    ).execute()
+    
+    # RPC returns UUID as string or None
+    favorite_id: Optional[str] = None
+    if result.data and isinstance(result.data, str):
+        favorite_id = result.data
+    
+    if favorite_id:
+        logger.debug(f"User {user_id} has favorite account {favorite_id}")
+    else:
+        logger.debug(f"User {user_id} has no favorite account set")
+    
+    return favorite_id
