@@ -24,6 +24,7 @@ from backend.services import (
     delete_invoice,
     create_transaction,
 )
+from backend.services.engagement_service import update_streak_after_activity
 from backend.schemas.invoices import (
     InvoiceOCRResponse,
     InvoiceOCRResponseDraft,
@@ -504,6 +505,18 @@ async def commit_invoice(
             f"Transaction created successfully: "
             f"id={transaction_id}, invoice_id={invoice_id}, user_id={auth_user.user_id}"
         )
+        
+        # Update streak after successful invoice commit (non-blocking)
+        try:
+            await update_streak_after_activity(
+                supabase_client=supabase_client,
+                user_id=auth_user.user_id
+            )
+        except Exception as streak_err:
+            # Don't fail the invoice commit if streak update fails
+            logger.warning(
+                f"Failed to update streak for user_id={auth_user.user_id}: {streak_err}"
+            )
         
         return InvoiceCommitResponse(
             status="COMMITTED",
