@@ -1,24 +1,31 @@
 """
 Category CRUD API endpoints.
 
-Provides endpoints for managing income/outcome categories.
+Provides endpoints for managing income/outcome categories with subcategory support.
 
 Endpoints:
 - GET /categories - List all categories (system + user's personal)
-- POST /categories - Create a new user category
+- POST /categories - Create a new user category (with optional inline subcategories)
 - GET /categories/{category_id} - Get single category
+- GET /categories/{category_id}/subcategories - List subcategories of a category
 - PATCH /categories/{category_id} - Update user category
 - DELETE /categories/{category_id} - Delete user category (with DB rule enforcement)
+
+Subcategory Support:
+- Categories can have subcategories (max depth: 1)
+- Use parent_category_id to create a subcategory
+- Use subcategories array to create parent with inline subcategories
 """
 
 import logging
-from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Annotated, List
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 
 from backend.auth.dependencies import get_authenticated_user, AuthenticatedUser
 from backend.db.client import get_supabase_client
 from backend.services.category_service import (
     get_all_categories,
+    get_subcategories,
     create_category,
     get_category_by_id,
     update_category,
@@ -39,6 +46,27 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/categories", tags=["categories"])
 
 
+def _build_category_response(cat: dict) -> CategoryResponse:
+    """Helper to build CategoryResponse from a category dict."""
+    subcategories = None
+    if cat.get("subcategories") is not None:
+        subcategories = [_build_category_response(sub) for sub in cat.get("subcategories", [])]
+    
+    return CategoryResponse(
+        id=str(cat.get("id")),
+        user_id=str(cat.get("user_id")) if cat.get("user_id") else None,
+        parent_category_id=str(cat.get("parent_category_id")) if cat.get("parent_category_id") else None,
+        key=cat.get("key"),
+        name=cat.get("name", ""),
+        flow_type=cat.get("flow_type", "outcome"),
+        icon=cat.get("icon", ""),
+        color=cat.get("color", ""),
+        created_at=cat.get("created_at", ""),
+        updated_at=cat.get("updated_at"),
+        subcategories=subcategories
+    )
+
+
 @router.get(
     "",
     response_model=CategoryListResponse,
@@ -53,6 +81,10 @@ router = APIRouter(prefix="/categories", tags=["categories"])
     - Orders by name alphabetically
     - Supports pagination via limit/offset
     
+    Query parameters:
+    - include_subcategories: If true, nest subcategories under their parents
+    - parent_only: If true, only return top-level categories (no subcategories in list)
+    
     Security:
     - Requires valid authentication token
     - System categories are visible to all users (read-only)
@@ -62,32 +94,12 @@ router = APIRouter(prefix="/categories", tags=["categories"])
 async def list_categories(
     auth_user: Annotated[AuthenticatedUser, Depends(get_authenticated_user)],
     limit: int = 100,
-    offset: int = 0
+    offset: int = 0,
+    include_subcategories: bool = Query(False, description="Nest subcategories under their parents"),
+    parent_only: bool = Query(False, description="Only return top-level categories")
 ) -> CategoryListResponse:
-    """
-    List all categories available to the user.
-    
-    **6-STEP ENDPOINT FLOW:**
-    
-    Step 1: Auth
-    - Handled by get_authenticated_user dependency
-    
-    Step 2: Parse/Validate Request
-    - Query parameters validated by FastAPI
-    
-    Step 3: Domain & Intent Filter
-    - No domain filtering needed (valid category list request)
-    
-    Step 4: Call Service
-    - Call get_all_categories() service function
-    
-    Step 5: Map Output -> ResponseModel
-    - Return CategoryListResponse
-    
-    Step 6: Persistence
-    - Read-only operation (no persistence)
-    """
-    logger.info(f"Listing categories for user {auth_user.user_id} (limit={limit}, offset={offset})")
+    """List all categories available to the user."""
+    logger.info(f"Listing categories for user {auth_user.user_id} (limit={limit}, offset={offset}, include_subcategories={include_subcategories})")
     
     supabase_client = get_supabase_client(auth_user.access_token)
     
@@ -96,21 +108,12 @@ async def list_categories(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
             limit=limit,
-            offset=offset
+            offset=offset,
+            include_subcategories=include_subcategories,
+            parent_only=parent_only
         )
         
-        category_responses = [
-            CategoryResponse(
-                id=str(cat.get("id")),
-                user_id=str(cat.get("user_id")) if cat.get("user_id") else None,
-                key=cat.get("key"),
-                name=cat.get("name", ""),
-                flow_type=cat.get("flow_type", "outcome"),
-                created_at=cat.get("created_at", ""),
-                updated_at=cat.get("updated_at")
-            )
-            for cat in categories
-        ]
+        category_responses = [_build_category_response(cat) for cat in categories]
         
         logger.info(f"Returning {len(category_responses)} categories for user {auth_user.user_id}")
         
@@ -145,6 +148,11 @@ async def list_categories(
     - Cannot create system categories (those are pre-defined)
     - Validates name and flow_type
     
+    Subcategory Support:
+    - To create a subcategory, provide parent_category_id
+    - To create a parent with inline subcategories, provide subcategories array
+    - Cannot do both (max depth is 1)
+    
     Security:
     - Requires valid authentication token
     - RLS enforces user can only create categories for themselves
@@ -154,58 +162,53 @@ async def create_user_category(
     request: CategoryCreateRequest,
     auth_user: Annotated[AuthenticatedUser, Depends(get_authenticated_user)]
 ) -> CategoryCreateResponse:
-    """
-    Create a new user category.
-    
-    Auth
-    - Handled by get_authenticated_user dependency
-    
-    Parse/Validate Request
-    - FastAPI validates CategoryCreateRequest
-
-    Domain & Intent Filter
-    - Validate name is not empty (Pydantic already enforces this)
-
-    Call Service
-    - Call create_category() service function
-    
-    Map Output -> ResponseModel
-    - Return CategoryCreateResponse
-    
-    Persistence
-    - Service layer handles DB insert with RLS
-    """
+    """Create a new user category with optional subcategories."""
     logger.info(
         f"Creating category for user {auth_user.user_id}: "
-        f"name={request.name}, flow_type={request.flow_type}"
+        f"name={request.name}, flow_type={request.flow_type}, parent={request.parent_category_id}"
     )
     
     supabase_client = get_supabase_client(auth_user.access_token)
     
     try:
-        created_category = await create_category(
+        # Convert inline subcategories to dicts
+        subcategories_data = None
+        if request.subcategories:
+            subcategories_data = [
+                {"name": sub.name, "icon": sub.icon, "color": sub.color}
+                for sub in request.subcategories
+            ]
+        
+        created_category, subcategories_created = await create_category(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
             name=request.name,
-            flow_type=request.flow_type
+            flow_type=request.flow_type,
+            icon=request.icon,
+            color=request.color,
+            parent_category_id=request.parent_category_id,
+            subcategories=subcategories_data
         )
         
-        logger.info(f"Category created successfully: id={created_category.get('id')}")
+        logger.info(f"Category created successfully: id={created_category.get('id')}, subcategories={subcategories_created}")
         
         return CategoryCreateResponse(
             status="CREATED",
-            category=CategoryResponse(
-                id=str(created_category.get("id")),
-                user_id=str(created_category.get("user_id")),
-                key=created_category.get("key"),
-                name=created_category.get("name", ""),
-                flow_type=created_category.get("flow_type", "outcome"),
-                created_at=created_category.get("created_at", ""),
-                updated_at=created_category.get("updated_at")
-            ),
-            message="Category created successfully"
+            category=_build_category_response(created_category),
+            subcategories_created=subcategories_created,
+            message=f"Category created successfully" + (f" with {subcategories_created} subcategories" if subcategories_created > 0 else "")
         )
         
+    except ValueError as e:
+        # Validation errors from service layer
+        logger.warning(f"Validation error creating category: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "validation_error",
+                "details": str(e)
+            }
+        )
     except Exception as e:
         logger.error(f"Failed to create category: {e}", exc_info=True)
         raise HTTPException(
@@ -230,6 +233,9 @@ async def create_user_category(
     - User can access system categories and their own categories
     - Returns 404 if category doesn't exist or not accessible
     
+    Query parameters:
+    - include_subcategories: If true, include subcategories in response
+    
     Security:
     - Requires valid authentication token
     - User can view system categories (read-only)
@@ -238,21 +244,10 @@ async def create_user_category(
 )
 async def get_category(
     category_id: str,
-    auth_user: Annotated[AuthenticatedUser, Depends(get_authenticated_user)]
+    auth_user: Annotated[AuthenticatedUser, Depends(get_authenticated_user)],
+    include_subcategories: bool = Query(False, description="Include subcategories in response")
 ) -> CategoryResponse:
-    """
-    Get details of a single category.
-    
-    Args:
-        category_id: UUID of the category to retrieve
-        auth_user: Authenticated user from token
-    
-    Returns:
-        CategoryResponse with category details
-    
-    Raises:
-        HTTPException 404: If category not found or not accessible
-    """
+    """Get details of a single category."""
     logger.info(f"Fetching category {category_id} for user {auth_user.user_id}")
     
     supabase_client = get_supabase_client(auth_user.access_token)
@@ -261,7 +256,8 @@ async def get_category(
         category = await get_category_by_id(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
-            category_id=category_id
+            category_id=category_id,
+            include_subcategories=include_subcategories
         )
         
         if not category:
@@ -276,15 +272,7 @@ async def get_category(
         
         logger.info(f"Returning category {category_id} for user {auth_user.user_id}")
         
-        return CategoryResponse(
-            id=str(category.get("id")),
-            user_id=str(category.get("user_id")) if category.get("user_id") else None,
-            key=category.get("key"),
-            name=category.get("name", ""),
-            flow_type=category.get("flow_type", "outcome"),
-            created_at=category.get("created_at", ""),
-            updated_at=category.get("updated_at")
-        )
+        return _build_category_response(category)
         
     except HTTPException:
         raise
@@ -295,6 +283,66 @@ async def get_category(
             detail={
                 "error": "fetch_error",
                 "details": "Failed to retrieve category from database"
+            }
+        )
+
+
+@router.get(
+    "/{category_id}/subcategories",
+    response_model=List[CategoryResponse],
+    status_code=status.HTTP_200_OK,
+    summary="List subcategories",
+    description="""
+    List all subcategories of a given parent category.
+    
+    Security:
+    - Requires valid authentication token
+    - User can only view subcategories of their own categories or system categories
+    """
+)
+async def list_subcategories(
+    category_id: str,
+    auth_user: Annotated[AuthenticatedUser, Depends(get_authenticated_user)]
+) -> List[CategoryResponse]:
+    """List subcategories of a parent category."""
+    logger.info(f"Fetching subcategories of {category_id} for user {auth_user.user_id}")
+    
+    supabase_client = get_supabase_client(auth_user.access_token)
+    
+    try:
+        # First verify the parent category exists and is accessible
+        parent = await get_category_by_id(
+            supabase_client=supabase_client,
+            user_id=auth_user.user_id,
+            category_id=category_id
+        )
+        
+        if not parent:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error": "not_found",
+                    "details": f"Category {category_id} not found or not accessible"
+                }
+            )
+        
+        subcategories = await get_subcategories(
+            supabase_client=supabase_client,
+            user_id=auth_user.user_id,
+            parent_category_id=category_id
+        )
+        
+        return [_build_category_response(sub) for sub in subcategories]
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch subcategories: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "fetch_error",
+                "details": "Failed to retrieve subcategories"
             }
         )
 
@@ -340,7 +388,7 @@ async def update_user_category(
         HTTPException 404: If category not found or not accessible
     """
     # Validate at least one field is provided
-    if request.name is None:
+    if request.name is None and request.icon is None and request.color is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -358,7 +406,9 @@ async def update_user_category(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
             category_id=category_id,
-            name=request.name
+            name=request.name,
+            icon=request.icon,
+            color=request.color
         )
         
         if not updated_category:
@@ -375,15 +425,7 @@ async def update_user_category(
         
         return CategoryUpdateResponse(
             status="UPDATED",
-            category=CategoryResponse(
-                id=str(updated_category.get("id")),
-                user_id=str(updated_category.get("user_id")) if updated_category.get("user_id") else None,
-                key=updated_category.get("key"),
-                name=updated_category.get("name", ""),
-                flow_type=updated_category.get("flow_type", "outcome"),
-                created_at=updated_category.get("created_at", ""),
-                updated_at=updated_category.get("updated_at")
-            ),
+            category=_build_category_response(updated_category),
             message="Category updated successfully"
         )
         
@@ -472,7 +514,7 @@ async def delete_user_category(
     supabase_client = get_supabase_client(auth_user.access_token)
     
     try:
-        success, transactions_reassigned, budget_links_removed, transactions_deleted = await delete_category(
+        success, transactions_reassigned, budget_links_removed, transactions_deleted, subcategories_orphaned = await delete_category(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
             category_id=category_id,
@@ -493,23 +535,27 @@ async def delete_user_category(
             logger.info(
                 f"Category {category_id} deleted successfully (CASCADE): "
                 f"{transactions_deleted} transactions deleted, "
-                f"{budget_links_removed} budget links removed"
+                f"{budget_links_removed} budget links removed, "
+                f"{subcategories_orphaned} subcategories orphaned"
             )
             message = (
                 f"Category deleted successfully. "
                 f"{transactions_deleted} transaction(s) deleted, "
-                f"{budget_links_removed} budget link(s) removed."
+                f"{budget_links_removed} budget link(s) removed, "
+                f"{subcategories_orphaned} subcategory(ies) orphaned."
             )
         else:
             logger.info(
                 f"Category {category_id} deleted successfully (REASSIGN): "
                 f"{transactions_reassigned} transactions reassigned to flow-type-matched 'general', "
-                f"{budget_links_removed} budget links removed"
+                f"{budget_links_removed} budget links removed, "
+                f"{subcategories_orphaned} subcategories orphaned"
             )
             message = (
                 f"Category deleted successfully. "
                 f"{transactions_reassigned} transaction(s) reassigned to flow-type-matched 'general', "
-                f"{budget_links_removed} budget link(s) removed."
+                f"{budget_links_removed} budget link(s) removed, "
+                f"{subcategories_orphaned} subcategory(ies) orphaned."
             )
         
         return CategoryDeleteResponse(
@@ -517,6 +563,7 @@ async def delete_user_category(
             category_id=str(category_id),
             transactions_reassigned=transactions_reassigned,
             budget_links_removed=budget_links_removed,
+            subcategories_orphaned=subcategories_orphaned,
             message=message
         )
         
