@@ -20,6 +20,7 @@ from backend.services import (
     update_transaction,
     delete_transaction,
 )
+from backend.services.engagement_service import update_streak_after_activity
 from backend.schemas.transactions import (
     TransactionCreateRequest,
     TransactionCreateResponse,
@@ -143,6 +144,18 @@ async def create_transaction_record(
         
         if not transaction_id:
             raise Exception("Transaction created but no ID returned")
+        
+        # Update streak after successful transaction creation (non-blocking)
+        try:
+            await update_streak_after_activity(
+                supabase_client=supabase_client,
+                user_id=auth_user.user_id
+            )
+        except Exception as streak_err:
+            # Don't fail the transaction if streak update fails
+            logger.warning(
+                f"Failed to update streak for user_id={auth_user.user_id}: {streak_err}"
+            )
         
         # Map to response model (validate and coerce required fields)
         transaction_detail = TransactionDetailResponse(

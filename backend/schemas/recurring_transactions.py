@@ -221,9 +221,22 @@ class SyncRecurringTransactionsResponse(BaseModel):
     """
     Response from sync endpoint.
     
-    Returns summary of how many transactions were generated.
+    Returns summary of transactions generated and caches updated.
+    The sync operation is atomic and handles:
+    - Paired recurring transfers (linked via paired_transaction_id)
+    - Account balance updates
+    - Budget consumption updates (outcome transactions only)
     """
     status: Literal["SYNCED"] = "SYNCED"
     transactions_generated: int = Field(..., description="Total transactions created")
     rules_processed: int = Field(..., description="Number of recurring rules processed")
+    accounts_updated: int = Field(
+        default=0, 
+        description="Number of accounts whose cached_balance was recomputed"
+    )
+    budgets_updated: int = Field(
+        default=0,
+        description="Number of budgets whose cached_consumption was recomputed (outcome only)"
+    )
     message: str = Field(..., description="Success message")
+

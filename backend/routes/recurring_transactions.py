@@ -571,19 +571,28 @@ sync_router = APIRouter(prefix="/transactions", tags=["transactions", "recurring
     description="""
     Synchronize and generate pending transactions from recurring rules.
     
-    This endpoint:
-    - Calls the PostgreSQL function sync_recurring_transactions
+    This endpoint is designed to be called ONCE from the splash screen on app launch.
+    It handles everything atomically in a single database transaction:
+    
+    **What it does:**
     - Generates all pending transactions up to today
-    - Returns summary of how many transactions were created
-    - Is idempotent (safe to call multiple times)
+    - Links paired recurring transfers via paired_transaction_id
+    - Updates account cached_balance for all affected accounts
+    - Updates budget cached_consumption for outcome transactions only
+    
+    **Efficiency:**
+    - Single API call replaces multiple separate calls
+    - Batch updates: one recompute per affected account/budget
+    - Transfers don't affect budget consumption (correct behavior)
+    
+    **Best Practice:**
+    - Call from splash screen on app launch
+    - Throttle to max 1 call per 5 minutes
+    - Force sync on pull-to-refresh or after 24h background
     
     Security:
     - Requires valid Authorization Bearer token
     - Only generates transactions for the authenticated user
-    
-    Note:
-    - This may generate many transactions if user has been absent for a long time
-    - TODO: Add preview mode and max occurrences limit
     """
 )
 async def sync_recurring_transactions_endpoint(
@@ -596,21 +605,24 @@ async def sync_recurring_transactions_endpoint(
     supabase_client = get_supabase_client(auth_user.access_token)
     
     try:
-        transactions_generated, rules_processed = await sync_recurring_transactions(
+        transactions_generated, rules_processed, accounts_updated, budgets_updated = await sync_recurring_transactions(
             supabase_client=supabase_client,
             user_id=auth_user.user_id
         )
         
         logger.info(
             f"Sync complete for user {auth_user.user_id}: "
-            f"{transactions_generated} transactions from {rules_processed} rules"
+            f"{transactions_generated} transactions from {rules_processed} rules, "
+            f"{accounts_updated} accounts, {budgets_updated} budgets updated"
         )
         
         return SyncRecurringTransactionsResponse(
             status="SYNCED",
             transactions_generated=transactions_generated,
             rules_processed=rules_processed,
-            message=f"Generated {transactions_generated} transactions from {rules_processed} recurring rules"
+            accounts_updated=accounts_updated,
+            budgets_updated=budgets_updated,
+            message=f"Generated {transactions_generated} transactions from {rules_processed} recurring rules. Updated {accounts_updated} accounts and {budgets_updated} budgets."
         )
         
     except Exception as e:

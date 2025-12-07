@@ -290,13 +290,15 @@ async def sync_recurring_transactions(
     supabase_client: Any,
     user_id: str,
     today: Optional[date] = None
-) -> Tuple[int, int]:
+) -> Tuple[int, int, int, int]:
     """
     Synchronize recurring transactions by calling the PostgreSQL function.
     
     This generates all pending transactions up to today by invoking the
-    database function defined in the migration:
-    supabase/migrations/20251106000001_sync_recurring_transactions_function.sql
+    database function. The function handles:
+    - Paired recurring transfers (linked via paired_transaction_id)
+    - Account balance updates (batch, once per affected account)
+    - Budget consumption updates (outcome transactions only, batch)
     
     Args:
         supabase_client: Authenticated Supabase client
@@ -304,7 +306,7 @@ async def sync_recurring_transactions(
         today: Target date (defaults to current date)
         
     Returns:
-        Tuple of (transactions_generated: int, rules_processed: int)
+        Tuple of (transactions_generated, rules_processed, accounts_updated, budgets_updated)
         
     Raises:
         Exception if RPC call fails
@@ -330,19 +332,22 @@ async def sync_recurring_transactions(
         
         if not result.data or len(result.data) == 0:
             logger.warning("Sync function returned no data")
-            return 0, 0
+            return 0, 0, 0, 0
         
         # Extract results from function return
         sync_result = result.data[0]
         transactions_generated = sync_result.get('transactions_generated', 0)
         rules_processed = sync_result.get('rules_processed', 0)
+        accounts_updated = sync_result.get('accounts_updated', 0)
+        budgets_updated = sync_result.get('budgets_updated', 0)
         
         logger.info(
             f"Sync complete: {transactions_generated} transactions generated "
-            f"from {rules_processed} rules"
+            f"from {rules_processed} rules, {accounts_updated} accounts updated, "
+            f"{budgets_updated} budgets updated"
         )
         
-        return transactions_generated, rules_processed
+        return transactions_generated, rules_processed, accounts_updated, budgets_updated
         
     except Exception as e:
         logger.error(f"Failed to sync recurring transactions: {e}", exc_info=True)
