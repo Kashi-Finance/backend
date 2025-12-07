@@ -6,6 +6,7 @@ CRITICAL RULES:
 2. Never trust client-provided user_id - always use authenticated user_id from JWT
 3. Handle paired transactions (transfers) according to DB delete rules
 4. Invoice-linked transactions should clear invoice_id when invoice is deleted
+5. After transaction CRUD, recompute both account balance AND budget consumption
 """
 
 import logging
@@ -14,6 +15,53 @@ from typing import Dict, Any, Optional, List, cast
 from supabase import Client
 
 logger = logging.getLogger(__name__)
+
+
+async def _recompute_budgets_for_category(
+    supabase_client: Client,
+    user_id: str,
+    category_id: str
+) -> None:
+    """
+    Recompute cached_consumption for all budgets tracking the given category.
+    
+    This should be called after creating, updating, or deleting a transaction
+    to keep budget data in sync. The RPC finds all active budgets that track
+    this category and recalculates their consumption atomically.
+    
+    Args:
+        supabase_client: Authenticated Supabase client
+        user_id: The authenticated user's ID
+        category_id: The category affected by the transaction
+    
+    Note:
+        This is a non-blocking operation - failures are logged but don't
+        raise exceptions to avoid failing the main transaction operation.
+    """
+    try:
+        result = supabase_client.rpc(
+            'recompute_budgets_for_category',
+            {
+                'p_user_id': user_id,
+                'p_category_id': category_id
+            }
+        ).execute()
+        
+        # Log which budgets were updated (RPC returns table, data is a list)
+        if result.data and isinstance(result.data, list):
+            for budget_update in result.data:
+                if isinstance(budget_update, dict):
+                    budget_name = budget_update.get('budget_name', 'Unknown')
+                    old_val = budget_update.get('old_consumption', 0)
+                    new_val = budget_update.get('new_consumption', 0)
+                    if old_val != new_val:
+                        logger.debug(
+                            f"Budget '{budget_name}' consumption updated: "
+                            f"{old_val} -> {new_val}"
+                        )
+    except Exception as e:
+        logger.warning(f"Failed to recompute budgets for category {category_id}: {e}")
+        # Don't raise - budget recompute is non-critical
 
 
 async def create_transaction(
@@ -106,6 +154,11 @@ async def create_transaction(
         logger.warning(f"Failed to recompute account balance after transaction creation: {e}")
         # Don't fail the transaction creation, just log the warning
         # The balance can be recomputed later if needed
+
+    # Recompute budget consumption for all budgets tracking this category
+    # Only applies to outcome transactions (expenses affect budget consumption)
+    if flow_type == "outcome":
+        await _recompute_budgets_for_category(supabase_client, user_id, category_id)
 
     # TODO(db-team): generate and save embedding for transaction.embedding field using text-embedding-3-small
     # The embedding should be generated from:
@@ -367,6 +420,26 @@ async def update_transaction(
     # This maintains accurate semantic search after updates
     # See backend/db.instructions.md section 3 for detailed embedding generation strategy
 
+    # Recompute budget consumption if amount, category, flow_type, or date changed
+    should_recompute_budget = (
+        amount is not None or
+        category_id is not None or
+        flow_type is not None or
+        date is not None
+    )
+    
+    if should_recompute_budget:
+        # Get the current category to recompute its budgets
+        current_category = updated_transaction.get("category_id")
+        if current_category:
+            await _recompute_budgets_for_category(supabase_client, user_id, current_category)
+        
+        # If category changed, also recompute the old category's budgets
+        if category_id is not None and existing.get("category_id") != category_id:
+            old_category = existing.get("category_id")
+            if old_category:
+                await _recompute_budgets_for_category(supabase_client, user_id, old_category)
+
     return updated_transaction
 
 
@@ -460,5 +533,10 @@ async def delete_transaction(
     except Exception as e:
         logger.warning(f"Failed to recompute account balance after transaction deletion: {e}")
         # Don't fail the deletion, just log the warning
+    
+    # Recompute budget consumption for affected category
+    category_id = existing.get("category_id")
+    if category_id:
+        await _recompute_budgets_for_category(supabase_client, user_id, category_id)
     
     return True
