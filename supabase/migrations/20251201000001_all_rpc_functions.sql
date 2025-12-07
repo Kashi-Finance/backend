@@ -558,6 +558,7 @@ COMMENT ON FUNCTION public.update_transfer(UUID, UUID, NUMERIC, DATE, TEXT) IS
 -- ---------------------------------------------------------
 -- 4.1 sync_recurring_transactions
 -- Generate pending transactions from recurring templates
+-- Handles: paired transfers, account balance updates, budget consumption updates
 -- ---------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION public.sync_recurring_transactions(
@@ -566,7 +567,9 @@ CREATE OR REPLACE FUNCTION public.sync_recurring_transactions(
 )
 RETURNS TABLE(
     transactions_generated INT,
-    rules_processed INT
+    rules_processed INT,
+    accounts_updated INT,
+    budgets_updated INT
 ) 
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -576,14 +579,28 @@ DECLARE
     v_rule RECORD;
     v_transactions_count INT := 0;
     v_rules_count INT := 0;
+    v_accounts_updated INT := 0;
+    v_budgets_updated INT := 0;
     v_next_occurrence DATE;
+    v_new_txn_id UUID;
+    v_paired_txn_id UUID;
+    v_paired_rule RECORD;
+    v_affected_accounts UUID[] := ARRAY[]::UUID[];
+    v_affected_categories UUID[] := ARRAY[]::UUID[];
+    v_processed_paired_rules UUID[] := ARRAY[]::UUID[];  -- Track already-processed paired rules
+    v_account_id UUID;
+    v_category_id UUID;
 BEGIN
-    -- Select active recurring rules
+    -- =========================================================================
+    -- PHASE 1: Generate transactions from recurring rules
+    -- =========================================================================
+    
+    -- Select active recurring rules (skip if already processed as part of a pair)
     FOR v_rule IN
         SELECT 
             id, account_id, category_id, flow_type, amount, description,
             frequency, interval, by_weekday, by_monthday,
-            start_date, next_run_date, end_date
+            start_date, next_run_date, end_date, paired_recurring_transaction_id
         FROM public.recurring_transaction
         WHERE user_id = p_user_id
           AND is_active = true
@@ -591,73 +608,220 @@ BEGIN
           AND next_run_date <= p_today
         ORDER BY next_run_date ASC
     LOOP
+        -- Skip if this rule was already processed as the "paired" side of a transfer
+        IF v_rule.id = ANY(v_processed_paired_rules) THEN
+            CONTINUE;
+        END IF;
+        
         v_rules_count := v_rules_count + 1;
         v_next_occurrence := v_rule.next_run_date;
         
-        WHILE v_next_occurrence <= p_today LOOP
-            IF v_rule.end_date IS NOT NULL AND v_next_occurrence > v_rule.end_date THEN
-                EXIT;
+        -- Check if this is a paired recurring transfer
+        IF v_rule.paired_recurring_transaction_id IS NOT NULL THEN
+            -- Fetch the paired rule
+            SELECT * INTO v_paired_rule
+            FROM public.recurring_transaction
+            WHERE id = v_rule.paired_recurring_transaction_id
+              AND user_id = p_user_id
+              AND is_active = true
+              AND deleted_at IS NULL;
+            
+            -- If paired rule exists and is valid, process as a transfer pair
+            IF v_paired_rule.id IS NOT NULL THEN
+                -- Mark paired rule as processed so we don't double-process
+                v_processed_paired_rules := array_append(v_processed_paired_rules, v_paired_rule.id);
+                
+                -- Generate paired transactions for each occurrence
+                WHILE v_next_occurrence <= p_today LOOP
+                    IF v_rule.end_date IS NOT NULL AND v_next_occurrence > v_rule.end_date THEN
+                        EXIT;
+                    END IF;
+                    
+                    -- Generate outgoing transaction (first rule)
+                    v_new_txn_id := gen_random_uuid();
+                    INSERT INTO public.transaction (
+                        id, user_id, account_id, category_id, flow_type, amount, description,
+                        date, recurring_transaction_id, system_generated_key, created_at, updated_at
+                    ) VALUES (
+                        v_new_txn_id, p_user_id, v_rule.account_id, v_rule.category_id, 
+                        v_rule.flow_type, v_rule.amount, v_rule.description,
+                        v_next_occurrence, v_rule.id, 'recurring_sync', NOW(), NOW()
+                    );
+                    
+                    -- Generate incoming transaction (paired rule)
+                    v_paired_txn_id := gen_random_uuid();
+                    INSERT INTO public.transaction (
+                        id, user_id, account_id, category_id, flow_type, amount, description,
+                        date, recurring_transaction_id, paired_transaction_id, system_generated_key, created_at, updated_at
+                    ) VALUES (
+                        v_paired_txn_id, p_user_id, v_paired_rule.account_id, v_paired_rule.category_id,
+                        v_paired_rule.flow_type, v_paired_rule.amount, v_paired_rule.description,
+                        v_next_occurrence, v_paired_rule.id, v_new_txn_id, 'recurring_sync', NOW(), NOW()
+                    );
+                    
+                    -- Link outgoing to incoming
+                    UPDATE public.transaction
+                    SET paired_transaction_id = v_paired_txn_id
+                    WHERE id = v_new_txn_id;
+                    
+                    v_transactions_count := v_transactions_count + 2;
+                    
+                    -- Track affected accounts (both accounts in the transfer)
+                    IF NOT v_rule.account_id = ANY(v_affected_accounts) THEN
+                        v_affected_accounts := array_append(v_affected_accounts, v_rule.account_id);
+                    END IF;
+                    IF NOT v_paired_rule.account_id = ANY(v_affected_accounts) THEN
+                        v_affected_accounts := array_append(v_affected_accounts, v_paired_rule.account_id);
+                    END IF;
+                    
+                    -- NOTE: Transfers do NOT affect budget consumption
+                    -- (they use system category 'transfer' which shouldn't have budgets)
+                    
+                    -- Calculate next occurrence
+                    CASE v_rule.frequency::text
+                        WHEN 'daily' THEN v_next_occurrence := v_next_occurrence + (v_rule.interval || ' days')::INTERVAL;
+                        WHEN 'weekly' THEN v_next_occurrence := v_next_occurrence + (v_rule.interval || ' weeks')::INTERVAL;
+                        WHEN 'monthly' THEN v_next_occurrence := v_next_occurrence + (v_rule.interval || ' months')::INTERVAL;
+                        WHEN 'yearly' THEN v_next_occurrence := v_next_occurrence + (v_rule.interval || ' years')::INTERVAL;
+                        ELSE EXIT;
+                    END CASE;
+                END LOOP;
+                
+                -- Update next_run_date for BOTH rules
+                UPDATE public.recurring_transaction
+                SET next_run_date = v_next_occurrence, updated_at = NOW()
+                WHERE id IN (v_rule.id, v_paired_rule.id);
+                
+            ELSE
+                -- Paired rule not found/inactive, process as standalone
+                GOTO process_standalone;
             END IF;
-            
-            -- Insert transaction
-            INSERT INTO public.transaction (
-                id,
-                user_id,
-                account_id,
-                category_id,
-                flow_type,
-                amount,
-                description,
-                date,
-                recurring_transaction_id,
-                system_generated_key,
-                created_at,
-                updated_at
-            ) VALUES (
-                gen_random_uuid(),
-                p_user_id,
-                v_rule.account_id,
-                v_rule.category_id,
-                v_rule.flow_type,
-                v_rule.amount,
-                v_rule.description,
-                v_next_occurrence,
-                v_rule.id,
-                'recurring_sync',
-                NOW(),
-                NOW()
-            );
-            
-            v_transactions_count := v_transactions_count + 1;
-            
-            -- Calculate next occurrence
-            CASE v_rule.frequency::text
-                WHEN 'daily' THEN
-                    v_next_occurrence := v_next_occurrence + (v_rule.interval || ' days')::INTERVAL;
-                WHEN 'weekly' THEN
-                    v_next_occurrence := v_next_occurrence + (v_rule.interval || ' weeks')::INTERVAL;
-                WHEN 'monthly' THEN
-                    v_next_occurrence := v_next_occurrence + (v_rule.interval || ' months')::INTERVAL;
-                WHEN 'yearly' THEN
-                    v_next_occurrence := v_next_occurrence + (v_rule.interval || ' years')::INTERVAL;
-                ELSE
+        ELSE
+            -- Process as standalone recurring transaction
+            <<process_standalone>>
+            WHILE v_next_occurrence <= p_today LOOP
+                IF v_rule.end_date IS NOT NULL AND v_next_occurrence > v_rule.end_date THEN
                     EXIT;
-            END CASE;
-        END LOOP;
-        
-        -- Update next_run_date
-        UPDATE public.recurring_transaction
-        SET next_run_date = v_next_occurrence,
-            updated_at = NOW()
-        WHERE id = v_rule.id;
+                END IF;
+                
+                -- Insert standalone transaction
+                v_new_txn_id := gen_random_uuid();
+                INSERT INTO public.transaction (
+                    id, user_id, account_id, category_id, flow_type, amount, description,
+                    date, recurring_transaction_id, system_generated_key, created_at, updated_at
+                ) VALUES (
+                    v_new_txn_id, p_user_id, v_rule.account_id, v_rule.category_id,
+                    v_rule.flow_type, v_rule.amount, v_rule.description,
+                    v_next_occurrence, v_rule.id, 'recurring_sync', NOW(), NOW()
+                );
+                
+                v_transactions_count := v_transactions_count + 1;
+                
+                -- Track affected account
+                IF NOT v_rule.account_id = ANY(v_affected_accounts) THEN
+                    v_affected_accounts := array_append(v_affected_accounts, v_rule.account_id);
+                END IF;
+                
+                -- Track affected category for budget updates (only for OUTCOME transactions)
+                IF v_rule.flow_type::text = 'outcome' AND NOT v_rule.category_id = ANY(v_affected_categories) THEN
+                    v_affected_categories := array_append(v_affected_categories, v_rule.category_id);
+                END IF;
+                
+                -- Calculate next occurrence
+                CASE v_rule.frequency::text
+                    WHEN 'daily' THEN v_next_occurrence := v_next_occurrence + (v_rule.interval || ' days')::INTERVAL;
+                    WHEN 'weekly' THEN v_next_occurrence := v_next_occurrence + (v_rule.interval || ' weeks')::INTERVAL;
+                    WHEN 'monthly' THEN v_next_occurrence := v_next_occurrence + (v_rule.interval || ' months')::INTERVAL;
+                    WHEN 'yearly' THEN v_next_occurrence := v_next_occurrence + (v_rule.interval || ' years')::INTERVAL;
+                    ELSE EXIT;
+                END CASE;
+            END LOOP;
+            
+            -- Update next_run_date
+            UPDATE public.recurring_transaction
+            SET next_run_date = v_next_occurrence, updated_at = NOW()
+            WHERE id = v_rule.id;
+        END IF;
     END LOOP;
     
-    RETURN QUERY SELECT v_transactions_count, v_rules_count;
+    -- =========================================================================
+    -- PHASE 2: Update account balances (batch, once per affected account)
+    -- =========================================================================
+    
+    FOREACH v_account_id IN ARRAY v_affected_accounts LOOP
+        -- Recompute balance: income - outcome
+        UPDATE public.account a
+        SET cached_balance = (
+            SELECT COALESCE(SUM(
+                CASE WHEN t.flow_type = 'income' THEN t.amount ELSE -t.amount END
+            ), 0)
+            FROM public.transaction t
+            WHERE t.account_id = a.id
+              AND t.user_id = p_user_id
+              AND t.deleted_at IS NULL
+        ),
+        updated_at = NOW()
+        WHERE a.id = v_account_id AND a.user_id = p_user_id;
+        
+        v_accounts_updated := v_accounts_updated + 1;
+    END LOOP;
+    
+    -- =========================================================================
+    -- PHASE 3: Update budget consumption (batch, once per affected category)
+    -- Only for outcome transactions - income doesn't affect budget consumption
+    -- Transfers are excluded because they use system category 'transfer'
+    -- =========================================================================
+    
+    FOREACH v_category_id IN ARRAY v_affected_categories LOOP
+        -- Find and update all active budgets tracking this category
+        UPDATE public.budget b
+        SET cached_consumption = (
+            SELECT COALESCE(SUM(t.amount), 0)
+            FROM public.transaction t
+            JOIN public.budget_category bc ON t.category_id = bc.category_id
+            WHERE bc.budget_id = b.id
+              AND bc.user_id = p_user_id
+              AND t.user_id = p_user_id
+              AND t.flow_type = 'outcome'
+              AND t.deleted_at IS NULL
+              -- Use current period boundaries based on budget frequency
+              AND t.date >= CASE b.frequency
+                  WHEN 'daily' THEN CURRENT_DATE
+                  WHEN 'weekly' THEN b.start_date + ((CURRENT_DATE - b.start_date) / (7 * b.interval)) * (7 * b.interval)
+                  WHEN 'monthly' THEN (b.start_date + (((CURRENT_DATE - b.start_date) / 30) / b.interval) * b.interval * INTERVAL '1 month')::DATE
+                  WHEN 'yearly' THEN (b.start_date + ((EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM b.start_date))::INT / b.interval * b.interval) * INTERVAL '1 year')::DATE
+                  WHEN 'once' THEN b.start_date
+                  ELSE CURRENT_DATE
+              END
+              AND t.date <= CASE b.frequency
+                  WHEN 'daily' THEN CURRENT_DATE
+                  WHEN 'weekly' THEN (b.start_date + ((CURRENT_DATE - b.start_date) / (7 * b.interval)) * (7 * b.interval) + (7 * b.interval) - 1)
+                  WHEN 'monthly' THEN ((b.start_date + (((CURRENT_DATE - b.start_date) / 30) / b.interval) * b.interval * INTERVAL '1 month') + b.interval * INTERVAL '1 month' - INTERVAL '1 day')::DATE
+                  WHEN 'yearly' THEN ((b.start_date + ((EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM b.start_date))::INT / b.interval * b.interval) * INTERVAL '1 year') + b.interval * INTERVAL '1 year' - INTERVAL '1 day')::DATE
+                  WHEN 'once' THEN COALESCE(b.end_date, '9999-12-31'::DATE)
+                  ELSE CURRENT_DATE
+              END
+        ),
+        updated_at = NOW()
+        WHERE b.id IN (
+            SELECT bc.budget_id 
+            FROM public.budget_category bc 
+            WHERE bc.category_id = v_category_id AND bc.user_id = p_user_id
+        )
+        AND b.user_id = p_user_id
+        AND b.is_active = TRUE
+        AND b.deleted_at IS NULL;
+        
+        v_budgets_updated := v_budgets_updated + (SELECT COUNT(*)::INT FROM public.budget_category WHERE category_id = v_category_id AND user_id = p_user_id);
+    END LOOP;
+    
+    -- Return summary
+    RETURN QUERY SELECT v_transactions_count, v_rules_count, v_accounts_updated, v_budgets_updated;
 END;
 $$;
 
 COMMENT ON FUNCTION public.sync_recurring_transactions(UUID, DATE) IS 
-  'Generates all pending transactions from recurring templates up to the given date.';
+  'Generates pending transactions from recurring templates. Handles paired transfers (links via paired_transaction_id), updates account balances, and updates budget consumption for outcome transactions. Efficient: batches updates per account/category.';
 
 -- ---------------------------------------------------------
 -- 4.2 create_recurring_transfer
@@ -1320,6 +1484,115 @@ $$;
 COMMENT ON FUNCTION public.recompute_budget_consumption(UUID, UUID, DATE, DATE) IS 
   'Recalculates budget.cached_consumption for a given period. Returns new consumption.';
 
+-- ---------------------------------------------------------
+-- 8.3 recompute_budgets_for_category
+-- Find and recompute all budgets tracking a specific category
+-- Called after transaction CRUD to keep budget data in sync
+-- ---------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION public.recompute_budgets_for_category(
+    p_user_id UUID,
+    p_category_id UUID
+)
+RETURNS TABLE (
+    budget_id UUID,
+    budget_name TEXT,
+    old_consumption NUMERIC(12,2),
+    new_consumption NUMERIC(12,2)
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+    v_budget RECORD;
+    v_old_consumption NUMERIC(12,2);
+    v_new_consumption NUMERIC(12,2);
+    v_period_start DATE;
+    v_period_end DATE;
+    v_today DATE := CURRENT_DATE;
+BEGIN
+    -- Find all active budgets that track this category
+    FOR v_budget IN
+        SELECT DISTINCT b.id, b.name, b.frequency, b.interval, b.start_date, b.end_date, b.cached_consumption
+        FROM public.budget b
+        JOIN public.budget_category bc ON bc.budget_id = b.id
+        WHERE bc.category_id = p_category_id
+          AND bc.user_id = p_user_id
+          AND b.user_id = p_user_id
+          AND b.is_active = TRUE
+          AND b.deleted_at IS NULL
+    LOOP
+        v_old_consumption := v_budget.cached_consumption;
+        
+        -- Calculate period boundaries based on budget frequency
+        CASE v_budget.frequency
+            WHEN 'daily' THEN
+                v_period_start := v_today;
+                v_period_end := v_today;
+            WHEN 'weekly' THEN
+                -- Find the start of the current week relative to budget start_date
+                v_period_start := v_budget.start_date + 
+                    ((v_today - v_budget.start_date) / (7 * v_budget.interval)) * (7 * v_budget.interval);
+                v_period_end := v_period_start + (7 * v_budget.interval) - 1;
+            WHEN 'monthly' THEN
+                -- Find the start of the current month period
+                v_period_start := v_budget.start_date + 
+                    (((v_today - v_budget.start_date) / 30) / v_budget.interval) * v_budget.interval * INTERVAL '1 month';
+                v_period_end := v_period_start + v_budget.interval * INTERVAL '1 month' - INTERVAL '1 day';
+            WHEN 'yearly' THEN
+                -- Find the start of the current yearly period
+                v_period_start := v_budget.start_date + 
+                    (EXTRACT(YEAR FROM v_today) - EXTRACT(YEAR FROM v_budget.start_date))::INT / v_budget.interval * v_budget.interval * INTERVAL '1 year';
+                v_period_end := v_period_start + v_budget.interval * INTERVAL '1 year' - INTERVAL '1 day';
+            WHEN 'once' THEN
+                -- One-time budget: use start_date to end_date or infinity
+                v_period_start := v_budget.start_date;
+                v_period_end := COALESCE(v_budget.end_date, '9999-12-31'::DATE);
+            ELSE
+                -- Default to daily if unknown frequency
+                v_period_start := v_today;
+                v_period_end := v_today;
+        END CASE;
+        
+        -- Respect end_date if set
+        IF v_budget.end_date IS NOT NULL AND v_period_end > v_budget.end_date THEN
+            v_period_end := v_budget.end_date;
+        END IF;
+        
+        -- Calculate consumption from transactions in ALL linked categories for this budget
+        SELECT COALESCE(SUM(t.amount), 0) INTO v_new_consumption
+        FROM public.transaction t
+        JOIN public.budget_category bc ON t.category_id = bc.category_id
+        WHERE bc.budget_id = v_budget.id
+          AND bc.user_id = p_user_id
+          AND t.user_id = p_user_id
+          AND t.flow_type = 'outcome'
+          AND t.deleted_at IS NULL
+          AND t.date >= v_period_start
+          AND t.date <= v_period_end;
+        
+        -- Update the budget's cached_consumption
+        UPDATE public.budget
+        SET cached_consumption = v_new_consumption, updated_at = NOW()
+        WHERE id = v_budget.id AND user_id = p_user_id;
+        
+        -- Return result row
+        budget_id := v_budget.id;
+        budget_name := v_budget.name;
+        old_consumption := v_old_consumption;
+        new_consumption := v_new_consumption;
+        RETURN NEXT;
+    END LOOP;
+    
+    RETURN;
+END;
+$$;
+
+COMMENT ON FUNCTION public.recompute_budgets_for_category(UUID, UUID) IS 
+  'Finds all active budgets tracking a category and recomputes their cached_consumption. '
+  'Called after transaction create/update/delete to keep budget data in sync.';
+
 -- =========================================================
 -- SECTION 9: CURRENCY VALIDATION RPCs
 -- =========================================================
@@ -1631,6 +1904,7 @@ GRANT EXECUTE ON FUNCTION public.delete_budget(UUID, UUID) TO authenticated;
 -- Cache Recomputation RPCs
 GRANT EXECUTE ON FUNCTION public.recompute_account_balance(UUID, UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.recompute_budget_consumption(UUID, UUID, DATE, DATE) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.recompute_budgets_for_category(UUID, UUID) TO authenticated;
 
 -- Currency Validation RPCs
 GRANT EXECUTE ON FUNCTION public.validate_user_currency(UUID, TEXT) TO authenticated;
