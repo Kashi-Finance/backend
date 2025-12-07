@@ -177,7 +177,7 @@ async def create_wishlist(
         user_id: The authenticated user's ID
         goal_title: User's goal description
         budget_hint: Maximum budget
-        currency_code: ISO currency code
+        currency_code: ISO currency code (must match profile.currency_preference)
         target_date: Optional target date (ISO string)
         preferred_store: Optional store preference
         user_note: Optional user note
@@ -187,12 +187,29 @@ async def create_wishlist(
         Tuple of (created_wishlist_dict, items_created_count)
     
     Raises:
+        ValueError: If currency doesn't match user's profile.currency_preference
         Exception: If wishlist or item creation fails
     
     Security:
         - RLS enforces user_id = auth.uid()
         - All operations are atomic (single transaction context via Supabase)
+        - Single-currency-per-user policy enforced
     """
+    # Validate currency matches user's profile (single-currency-per-user policy)
+    try:
+        supabase_client.rpc(
+            'validate_user_currency',
+            {'p_user_id': user_id, 'p_currency': currency_code}
+        ).execute()
+    except Exception as e:
+        error_msg = str(e)
+        if "Currency mismatch" in error_msg:
+            raise ValueError(
+                f"Currency '{currency_code}' does not match your profile currency. "
+                "All wishlists must use the same currency as your profile."
+            )
+        raise
+    
     logger.info(
         f"Creating wishlist for user {user_id}: "
         f"goal_title='{goal_title}', budget_hint={budget_hint}, "

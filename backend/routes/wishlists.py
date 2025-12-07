@@ -240,6 +240,16 @@ async def create_new_wishlist(
             message=message
         )
         
+    except ValueError as e:
+        # Currency validation error from service layer
+        logger.warning(f"Currency validation failed for wishlist creation: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "currency_mismatch",
+                "details": str(e)
+            }
+        )
     except Exception as e:
         logger.error(f"Failed to create wishlist for user {auth_user.user_id}: {e}", exc_info=True)
         raise HTTPException(

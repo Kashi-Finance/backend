@@ -22,7 +22,7 @@ class WishlistItemFromRecommendation(BaseModel):
     """
     A specific store option selected from the recommendation flow.
     
-    These come from FormatterAgent output and are saved when the user
+    These come from the recommendation service output and are saved when the user
     explicitly selects them at the end of the recommendation wizard.
     """
     product_title: str = Field(
@@ -65,7 +65,7 @@ class WishlistItemFromRecommendation(BaseModel):
     )
     copy_for_user: str = Field(
         ...,
-        description="Descriptive copy for UI (formatted by FormatterAgent)",
+        description="Descriptive copy for UI display",
         min_length=1,
         max_length=1000,
         examples=[
