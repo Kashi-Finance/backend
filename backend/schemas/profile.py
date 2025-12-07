@@ -5,6 +5,7 @@ These models define the strict request/response contracts for user profile manag
 Profiles contain user preferences and personal information (1:1 with auth.users).
 """
 
+from datetime import date
 from typing import Optional
 from pydantic import BaseModel, Field
 
@@ -36,6 +37,30 @@ class ProfileResponse(BaseModel):
         description="User's country (ISO-2 code, e.g. 'GT'). Used for localized recommendations.",
         examples=["GT", "US", "MX"]
     )
+    # Engagement / Streak fields
+    current_streak: int = Field(
+        default=0,
+        ge=0,
+        description="Current consecutive days with financial activity"
+    )
+    longest_streak: int = Field(
+        default=0,
+        ge=0,
+        description="All-time longest streak achieved"
+    )
+    last_activity_date: Optional[date] = Field(
+        None,
+        description="Last date when user logged financial activity"
+    )
+    streak_freeze_available: bool = Field(
+        default=True,
+        description="Whether user can use a streak freeze this week"
+    )
+    streak_freeze_used_this_week: bool = Field(
+        default=False,
+        description="Whether user has used their streak freeze this week"
+    )
+    # Timestamps
     created_at: str = Field(..., description="ISO-8601 timestamp when profile was created")
     updated_at: str = Field(..., description="ISO-8601 timestamp of last profile update")
 

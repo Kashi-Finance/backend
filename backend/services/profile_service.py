@@ -138,10 +138,29 @@ async def update_user_profile(
     Returns:
         The updated profile record
     
+    Raises:
+        ValueError: If trying to change currency_preference when user has financial data
+    
     Security:
         - RLS enforces user_id = auth.uid()
         - User can only update their own profile
+        - Currency changes are blocked if user has accounts/wishlists/budgets
     """
+    # If changing currency_preference, verify user has no financial data
+    if 'currency_preference' in updates:
+        can_change_result = supabase_client.rpc(
+            'can_change_user_currency',
+            {'p_user_id': user_id}
+        ).execute()
+        
+        can_change = can_change_result.data if can_change_result.data is not None else False
+        
+        if not can_change:
+            raise ValueError(
+                "Cannot change currency preference. You have existing accounts, wishlists, or budgets. "
+                "Delete all financial data first to change your currency."
+            )
+    
     logger.info(f"Updating profile for user {user_id}: {list(updates.keys())}")
     
     result = (
