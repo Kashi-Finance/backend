@@ -40,6 +40,7 @@ class BudgetResponse(BaseModel):
     user_id: str = Field(..., description="Owner user UUID")
     name: Optional[str] = Field(None, description="Optional user-friendly name (e.g., 'Monthly Groceries')")
     limit_amount: float = Field(..., description="Maximum allowed spend for this budget period")
+    currency: str = Field(..., description="ISO currency code (matches profile.currency_preference)")
     frequency: BudgetFrequency = Field(..., description="Budget repetition cadence")
     interval: int = Field(..., description="How often the budget repeats in units of frequency")
     start_date: str = Field(..., description="When this budget starts counting (ISO-8601 date)")

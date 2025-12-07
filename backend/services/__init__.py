@@ -17,6 +17,7 @@ from .account_service import (
     update_account,
     delete_account_with_reassignment,
     delete_account_with_transactions,
+    recompute_account_balance,
 )
 from .budget_service import (
     get_all_budgets,
@@ -63,6 +64,7 @@ __all__ = [
     "update_account",
     "delete_account_with_reassignment",
     "delete_account_with_transactions",
+    "recompute_account_balance",
     "get_all_budgets",
     "get_budget_by_id",
     "create_budget",

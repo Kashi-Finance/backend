@@ -180,6 +180,8 @@ async def create_budget(
     """
     Create a new budget and link categories.
     
+    The budget currency is automatically set to the user's profile.currency_preference.
+    
     Args:
         supabase_client: Authenticated Supabase client
         user_id: The authenticated user's ID
@@ -196,16 +198,29 @@ async def create_budget(
         Tuple of (created budget, number of categories linked)
     
     Raises:
-        Exception: If the database operation fails
+        Exception: If the database operation fails or user profile not found
     
     Security:
         - RLS enforces that user_id = auth.uid()
         - User can only create budgets for themselves
+        - Currency is auto-populated from profile (single-currency-per-user policy)
     """
+    # Get user's currency from profile (single-currency-per-user policy)
+    currency_result = supabase_client.rpc(
+        'get_user_currency',
+        {'p_user_id': user_id}
+    ).execute()
+    
+    if not currency_result.data:
+        raise Exception("Failed to get user currency: profile not found")
+    
+    user_currency = currency_result.data
+    
     budget_data = {
         "user_id": user_id,
         "name": name,
         "limit_amount": limit_amount,
+        "currency": user_currency,  # Auto-populated from profile
         "frequency": frequency,
         "interval": interval,
         "start_date": start_date,
@@ -213,7 +228,7 @@ async def create_budget(
         "is_active": is_active
     }
     
-    logger.info(f"Creating budget for user {user_id}: limit={limit_amount}, frequency={frequency}")
+    logger.info(f"Creating budget for user {user_id}: limit={limit_amount} {user_currency}, frequency={frequency}")
     
     result = supabase_client.table("budget").insert(budget_data).execute()
     
