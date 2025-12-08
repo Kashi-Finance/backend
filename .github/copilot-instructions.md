@@ -111,7 +111,7 @@ When you create or modify an endpoint:
 
 ## 5. AI Components (LLM Workflows)
 
-> **Architecture Note (November 2025):** The project uses simplified LLM workflows instead of complex multi-agent architectures. The previous ADK Orchestrator-Workers pattern was replaced with Prompt Chaining for recommendations.
+> **Architecture Note:** The project uses simplified LLM workflows instead of complex multi-agent architectures. The recommendation system uses Gemini with Google Search grounding for web-verified product recommendations.
 
 There are exactly **two (2)** AI-powered components in this project:
 
@@ -120,10 +120,11 @@ There are exactly **two (2)** AI-powered components in this project:
 - **Purpose:** OCR and structured extraction from receipt images
 - **NOT an ADK agent:** Uses direct Gemini API
 
-### 5.2 Recommendation System (Prompt Chaining Workflow)
-- **Implementation:** Single-shot DeepSeek V3.2 call
-- **Purpose:** Product recommendations based on user goals
-- **NOT an ADK agent:** Uses OpenAI-compatible API
+### 5.2 Recommendation System (Web-Grounded LLM)
+- **Implementation:** Single-shot Gemini call with Google Search grounding
+- **Model:** Gemini 2.5 Flash (`gemini-2.5-flash`)
+- **Purpose:** Product recommendations with REAL web data via Google Search
+- **NOT an ADK agent:** Uses Google Gen AI SDK with Google Search tool
 - **Location:** `backend/services/recommendation_service.py`
 
 ### Rules:
