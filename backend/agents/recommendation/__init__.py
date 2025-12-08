@@ -1,13 +1,13 @@
 """
-Recommendation System - Prompt Chaining Architecture
+Recommendation System - Web-Grounded LLM Architecture
 
-This module contains the prompt templates for the Prompt Chaining recommendation system.
+This module contains the prompt templates for the Gemini-based recommendation system.
 
 Architecture:
-- Pattern: Prompt Chaining (single LLM call)
-- Model: Perplexity Sonar (with native web grounding)
+- Pattern: Web-Grounded LLM (single API call with Google Search tool)
+- Model: Gemini 2.5 Flash (with Google Search grounding)
 - Temperature: 0.2 (near-deterministic)
-- Output: Structured JSON
+- Output: Structured JSON (via response_schema with Pydantic)
 
 The service layer is in:
 - backend/services/recommendation_service.py
