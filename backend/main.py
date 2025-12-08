@@ -4,26 +4,27 @@ FastAPI application entry point for Kashi Finances backend.
 This module creates the FastAPI app instance and registers all routers.
 """
 
-import os
 import logging
+import os
+
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from backend.routes.accounts import router as accounts_router
 from backend.routes.auth import router as auth_router
 from backend.routes.budgets import router as budgets_router
 from backend.routes.categories import router as categories_router
+from backend.routes.engagement import router as engagement_router
 from backend.routes.invoices import router as invoices_router
-from backend.routes.transactions import router as transactions_router
 from backend.routes.profile import router as profile_router
+from backend.routes.recommendations import router as recommendations_router
 from backend.routes.recurring_transactions import router as recurring_transactions_router
 from backend.routes.recurring_transactions import sync_router as recurring_sync_router
+from backend.routes.transactions import router as transactions_router
 from backend.routes.transfers import router as transfers_router
 from backend.routes.wishlists import router as wishlists_router
-from backend.routes.recommendations import router as recommendations_router
-from backend.routes.engagement import router as engagement_router
 
 # Configure logging
 logging.basicConfig(
@@ -37,21 +38,21 @@ logger = logging.getLogger(__name__)
 def _get_cors_origins() -> list[str]:
     """
     Get allowed CORS origins based on environment.
-    
+
     Environment-based configuration:
     - ENVIRONMENT=production: Uses CORS_ALLOWED_ORIGINS env var (required)
     - ENVIRONMENT=testing/development: Allows all origins for local dev
-    
+
     For mobile apps:
     - Native mobile apps (Flutter) don't send Origin headers, so CORS
       doesn't restrict them. CORS primarily affects web browsers.
     - If a web client is added later, origins should be explicitly listed.
-    
+
     Returns:
         List of allowed origin URLs, or ["*"] for development.
     """
     environment = os.getenv("ENVIRONMENT", "development")
-    
+
     if environment == "production":
         # Production: Require explicit origins
         cors_origins = os.getenv("CORS_ALLOWED_ORIGINS", "")
@@ -87,14 +88,14 @@ app = FastAPI(
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """
     Log detailed validation errors for debugging.
-    
+
     This helps diagnose 422 errors from the frontend.
     """
     logger.error(
         f"Validation error on {request.method} {request.url.path}: {exc.errors()}"
     )
     logger.error(f"Request body preview: {str(await request.body())[:500]}")
-    
+
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={

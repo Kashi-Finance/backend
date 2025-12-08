@@ -11,34 +11,35 @@ Flow:
 import base64
 import logging
 from typing import Annotated, Any
+
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
-from backend.auth.dependencies import get_authenticated_user, AuthenticatedUser
+from backend.agents.invoice import run_invoice_agent
+from backend.agents.invoice.tools import get_user_categories
+from backend.auth.dependencies import AuthenticatedUser, get_authenticated_user
 from backend.db.client import get_supabase_client
-from backend.services import (
-    create_invoice,
-    get_user_profile,
-    get_user_invoices,
-    get_invoice_by_id,
-    upload_invoice_image,
-    delete_invoice,
-    create_transaction,
-)
-from backend.services.engagement_service import update_streak_after_activity
 from backend.schemas.invoices import (
+    CategorySuggestionResponse,
+    InvoiceCommitRequest,
+    InvoiceCommitResponse,
+    InvoiceDeleteResponse,
+    InvoiceDetailResponse,
+    InvoiceListResponse,
     InvoiceOCRResponse,
     InvoiceOCRResponseDraft,
     InvoiceOCRResponseInvalid,
-    InvoiceCommitRequest,
-    InvoiceCommitResponse,
-    InvoiceListResponse,
-    InvoiceDetailResponse,
     PurchasedItemResponse,
-    CategorySuggestionResponse,
-    InvoiceDeleteResponse,
 )
-from backend.agents.invoice import run_invoice_agent
-from backend.agents.invoice.tools import get_user_categories
+from backend.services import (
+    create_invoice,
+    create_transaction,
+    delete_invoice,
+    get_invoice_by_id,
+    get_user_invoices,
+    get_user_profile,
+    upload_invoice_image,
+)
+from backend.services.engagement_service import update_streak_after_activity
 
 logger = logging.getLogger(__name__)
 
@@ -52,18 +53,18 @@ router = APIRouter(prefix="/invoices", tags=["invoices"])
     summary="Process receipt image with OCR",
     description="""
     Upload a receipt/invoice image for OCR extraction.
-    
+
     This endpoint:
     - Accepts image files (JPEG, PNG, etc.)
     - Calls InvoiceAgent to extract structured data
     - Returns either a DRAFT preview or INVALID_IMAGE error
     - NEVER persists to database (preview only)
-    
+
     Frontend should:
     - Show DRAFT data to user for editing/confirmation
     - Call /invoices/commit to actually save the transaction
     - Handle INVALID_IMAGE by asking user to retake photo
-    
+
     Security:
     - Requires valid Authorization Bearer token
     - Only processes invoices for authenticated user
@@ -75,17 +76,17 @@ async def process_invoice_ocr(
 ) -> InvoiceOCRResponse:
     """
     Process receipt image and extract structured invoice data.
-    
+
     **6-STEP ENDPOINT FLOW:**
-    
+
     Step 1: Auth
     - Handled by get_authenticated_user dependency
     - Extracts user_id and access_token from Supabase Auth token
-    
+
     Step 2: Parse/Validate Request
     - FastAPI validates UploadFile automatically
     - Type checking ensures image is present
-    
+
     Step 3: Domain & Intent Filter
     - Check if uploaded file is actually an image
     - Verify file size is reasonable (prevent DoS)
@@ -102,11 +103,11 @@ async def process_invoice_ocr(
     - NONE - this endpoint is preview only
     - Actual persistence happens in /invoices/commit
     """
-    
+
     user_id = auth_user.user_id
-    
+
     # --- STEP 3: Domain & Intent Filter ---
-    
+
     # Validate file type
     if not image.content_type or not image.content_type.startswith("image/"):
         logger.warning(f"Invalid content type: {image.content_type}")
@@ -117,7 +118,7 @@ async def process_invoice_ocr(
                 "details": "File must be an image (JPEG, PNG, etc.)"
             }
         )
-    
+
     # Read image data
     try:
         image_bytes = await image.read()
@@ -130,7 +131,7 @@ async def process_invoice_ocr(
                 "details": "Could not read uploaded image file"
             }
         )
-    
+
     # Validate file size (max 10MB for now)
     max_size_mb = 10
     max_size_bytes = max_size_mb * 1024 * 1024
@@ -143,28 +144,28 @@ async def process_invoice_ocr(
                 "details": f"Image must be smaller than {max_size_mb}MB"
             }
         )
-    
+
     # Encode image as base64 for agent
     image_base64 = base64.b64encode(image_bytes).decode("utf-8")
-    
+
     logger.info(
         f"Processing OCR for user_id={user_id}, "
         f"filename={image.filename}, "
         f"size={len(image_bytes)} bytes"
     )
-    
+
     # Create authenticated Supabase client for profile and categories
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     # NOTE: Image will NOT be uploaded to storage during OCR (draft phase).
     # Upload happens ONLY when user confirms via /invoices/commit endpoint.
     # We do NOT pass storage_path to the agent because the image doesn't exist in storage yet.
-    
+
     # Fetch user profile for country and currency_preference
     # This allows the InvoiceAgent to provide localized extraction
     # (e.g. recognize GTQ for Guatemala, MXN for Mexico, etc.)
     profile = await get_user_profile(supabase_client=supabase_client, user_id=user_id)
-    
+
     if profile:
         country = profile.get("country", "GT")
         currency_preference = profile.get("currency_preference", "GTQ")
@@ -181,7 +182,7 @@ async def process_invoice_ocr(
             f"Profile not found for user {user_id}, using defaults: "
             f"country={country}, currency={currency_preference}"
         )
-    
+
     # Fetch user's categories for the agent
     try:
         user_categories = get_user_categories(supabase_client, user_id)
@@ -189,7 +190,7 @@ async def process_invoice_ocr(
         logger.error(f"Error fetching user categories: {e}", exc_info=True)
         # If we can't fetch categories, provide empty list rather than failing
         user_categories = []
-    
+
 
     # --- STEP 4: Call Agent ---
     try:
@@ -209,16 +210,16 @@ async def process_invoice_ocr(
                 "details": "Failed to process invoice with OCR agent"
             }
         )
-    
+
     # --- STEP 5: Map Output -> ResponseModel ---
-    
+
     if agent_output["status"] == "INVALID_IMAGE":
         logger.info(f"InvoiceAgent returned INVALID_IMAGE: {agent_output.get('reason', 'Unknown')}")
         return InvoiceOCRResponseInvalid(
             status="INVALID_IMAGE",
             reason=agent_output.get("reason") or "Could not extract invoice data from image"
         )
-    
+
     elif agent_output["status"] == "OUT_OF_SCOPE":
         logger.warning(f"InvoiceAgent returned OUT_OF_SCOPE: {agent_output.get('reason', 'Unknown')}")
         raise HTTPException(
@@ -228,14 +229,14 @@ async def process_invoice_ocr(
                 "details": agent_output.get("reason") or "Request is not a valid invoice processing task"
             }
         )
-    
+
     elif agent_output["status"] == "DRAFT":
         logger.info(
             f"InvoiceAgent extracted DRAFT: "
             f"store={agent_output.get('store_name')}, "
             f"total={agent_output.get('total_amount')} {agent_output.get('currency')}"
         )
-        
+
         # Map agent output to response schema
         # Normalize optional agent fields safely (agent_output keys may exist but be None)
         purchased_items_raw = agent_output.get("purchased_items") or []
@@ -318,7 +319,7 @@ async def process_invoice_ocr(
             items=items,
             category_suggestion=category_suggestion
         )
-    
+
     else:
         # Unknown status from agent
         logger.error(f"Unknown agent status: {agent_output.get('status')}")
@@ -338,13 +339,13 @@ async def process_invoice_ocr(
     summary="Commit invoice to database",
     description="""
     Persist confirmed invoice data to the database.
-    
+
     This endpoint:
     - Accepts edited/confirmed data from the frontend
     - Formats data into the canonical EXTRACTED_INVOICE_TEXT_FORMAT
     - Inserts record into the invoice table with RLS enforcement
     - Returns the created invoice ID
-    
+
     Security:
     - Requires valid Authorization Bearer token
     - RLS ensures user can only create invoices for themselves
@@ -357,15 +358,15 @@ async def commit_invoice(
 ) -> InvoiceCommitResponse:
     """
     Persist invoice data to Supabase with RLS enforcement.
-    
+
     Auth
     - Handled by get_authenticated_user dependency
     - Extracts user_id and access_token from Supabase Auth
-    
+
     Parse/Validate Request
     - FastAPI validates InvoiceCommitRequest automatically
     - Ensures all required fields are present
-    
+
     Domain & Intent Filter
     - Validate that this is a valid invoice commit request
     - Check that required fields are non-empty
@@ -378,9 +379,9 @@ async def commit_invoice(
     - Call invoice_service.create_invoice()
     - RLS automatically enforces user_id = auth.uid()
     """
-    
+
     # --- Domain & Intent Filter ---
-    
+
     # Basic validation (Pydantic already enforces non-null)
     if not request.store_name.strip():
         raise HTTPException(
@@ -390,7 +391,7 @@ async def commit_invoice(
                 "details": "store_name cannot be empty"
             }
         )
-    
+
     if not request.image_base64.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -399,16 +400,16 @@ async def commit_invoice(
                 "details": "image_base64 cannot be empty"
             }
         )
-    
+
     logger.info(
         f"Committing invoice for user_id={auth_user.user_id}, "
         f"store={request.store_name}, "
         f"amount={request.total_amount} {request.currency}"
     )
-    
+
     # Create authenticated Supabase client (RLS enforced)
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     # --- UPLOAD IMAGE TO STORAGE (only happens on commit) ---
     try:
         # Decode base64 to bytes
@@ -423,7 +424,7 @@ async def commit_invoice(
                     "details": "Could not decode image_base64 field"
                 }
             )
-        
+
         # Upload image to Supabase Storage
         storage_path = await upload_invoice_image(
             supabase_client=supabase_client,
@@ -444,7 +445,7 @@ async def commit_invoice(
                 "details": "Failed to upload receipt image to storage"
             }
         )
-    
+
     try:
         # Persist invoice to database
         # Ensure purchased_items is a string when passed to create_invoice.
@@ -464,20 +465,20 @@ async def commit_invoice(
             currency=request.currency,
             purchased_items=purchased_items_str,
         )
-        
+
         invoice_id = created_invoice.get("id")
-        
+
         if not invoice_id:
             raise Exception("Invoice created but no ID returned")
-        
+
         logger.info(
             f"Invoice committed successfully: "
             f"id={invoice_id}, user_id={auth_user.user_id}"
         )
-        
+
         # Create linked transaction
         from backend.utils.constants import SYSTEM_GENERATED_KEYS
-        
+
         created_transaction = await create_transaction(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
@@ -490,9 +491,9 @@ async def commit_invoice(
             invoice_id=str(invoice_id),  # Link to invoice
             system_generated_key=SYSTEM_GENERATED_KEYS['INVOICE_OCR']  # Mark as OCR-generated
         )
-        
+
         transaction_id = created_transaction.get("id")
-        
+
         if not transaction_id:
             # Log warning but don't fail the entire operation
             # Invoice is already committed at this point
@@ -500,12 +501,12 @@ async def commit_invoice(
                 f"Invoice {invoice_id} committed but transaction creation failed"
             )
             raise Exception("Transaction created but no ID returned")
-        
+
         logger.info(
             f"Transaction created successfully: "
             f"id={transaction_id}, invoice_id={invoice_id}, user_id={auth_user.user_id}"
         )
-        
+
         # Update streak after successful invoice commit (non-blocking)
         try:
             await update_streak_after_activity(
@@ -517,14 +518,14 @@ async def commit_invoice(
             logger.warning(
                 f"Failed to update streak for user_id={auth_user.user_id}: {streak_err}"
             )
-        
+
         return InvoiceCommitResponse(
             status="COMMITTED",
             invoice_id=str(invoice_id),
             transaction_id=str(transaction_id),
             message="Invoice and transaction saved successfully"
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to commit invoice: {e}", exc_info=True)
         raise HTTPException(
@@ -543,13 +544,13 @@ async def commit_invoice(
     summary="List user's invoices",
     description="""
     Retrieve all invoices belonging to the authenticated user.
-    
+
     This endpoint:
     - Returns paginated list of invoices
     - Only shows invoices owned by the authenticated user (RLS enforced)
     - Orders by created_at descending (newest first)
     - Supports pagination via limit/offset query parameters
-    
+
     Security:
     - Requires valid authentication token
     - RLS ensures users only see their own invoices
@@ -562,20 +563,20 @@ async def list_invoices(
 ) -> InvoiceListResponse:
     """
     List all invoices for the authenticated user.
-    
+
     Args:
         auth_user: Authenticated user from token
         limit: Maximum number of invoices to return (default 50)
         offset: Number of invoices to skip for pagination (default 0)
-    
+
     Returns:
         InvoiceListResponse with list of invoices and pagination metadata
     """
     logger.info(f"Listing invoices for user {auth_user.user_id} (limit={limit}, offset={offset})")
-    
+
     # Create authenticated Supabase client
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         # Fetch invoices from database (RLS enforced)
         invoices = await get_user_invoices(
@@ -584,7 +585,7 @@ async def list_invoices(
             limit=limit,
             offset=offset
         )
-        
+
         # Map to response models
         invoice_responses = [
             InvoiceDetailResponse(
@@ -597,16 +598,16 @@ async def list_invoices(
             )
             for inv in invoices
         ]
-        
+
         logger.info(f"Returning {len(invoice_responses)} invoices for user {auth_user.user_id}")
-        
+
         return InvoiceListResponse(
             invoices=invoice_responses,
             count=len(invoice_responses),
             limit=limit,
             offset=offset
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to fetch invoices: {e}", exc_info=True)
         raise HTTPException(
@@ -625,12 +626,12 @@ async def list_invoices(
     summary="Get invoice details",
     description="""
     Retrieve a single invoice by its ID.
-    
+
     This endpoint:
     - Returns detailed invoice information
     - Only returns invoice if it belongs to the authenticated user (RLS enforced)
     - Returns 404 if invoice doesn't exist or belongs to another user
-    
+
     Security:
     - Requires valid authentication token
     - RLS ensures users can only access their own invoices
@@ -642,22 +643,22 @@ async def get_invoice(
 ) -> InvoiceDetailResponse:
     """
     Get details of a single invoice.
-    
+
     Args:
         invoice_id: UUID of the invoice to retrieve
         auth_user: Authenticated user from token
-    
+
     Returns:
         InvoiceDetailResponse with invoice details
-    
+
     Raises:
         HTTPException 404: If invoice not found or not accessible by user
     """
     logger.info(f"Fetching invoice {invoice_id} for user {auth_user.user_id}")
-    
+
     # Create authenticated Supabase client
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         # Fetch invoice from database (RLS enforced)
         invoice = await get_invoice_by_id(
@@ -665,7 +666,7 @@ async def get_invoice(
             user_id=auth_user.user_id,
             invoice_id=invoice_id
         )
-        
+
         if not invoice:
             logger.warning(
                 f"Invoice {invoice_id} not found or not accessible by user {auth_user.user_id}"
@@ -677,9 +678,9 @@ async def get_invoice(
                     "details": f"Invoice {invoice_id} not found or not accessible"
                 }
             )
-        
+
         logger.info(f"Returning invoice {invoice_id} for user {auth_user.user_id}")
-        
+
         return InvoiceDetailResponse(
             id=str(invoice.get("id")),
             user_id=str(invoice.get("user_id")),
@@ -688,7 +689,7 @@ async def get_invoice(
             created_at=invoice.get("created_at", ""),
             updated_at=invoice.get("updated_at")
         )
-        
+
     except HTTPException:
         # Re-raise HTTP exceptions (like 404)
         raise
@@ -710,12 +711,12 @@ async def get_invoice(
     summary="Delete an invoice",
     description="""
     Delete an existing invoice and its associated receipt image from storage.
-    
+
     This endpoint:
     - Permanently removes the invoice from the database
     - Deletes the associated receipt image from Supabase Storage
     - Requires valid Authorization Bearer token
-    
+
     Security:
     - Only the invoice owner can delete their invoices
     - Returns 404 if invoice doesn't exist or belongs to another user
@@ -727,7 +728,7 @@ async def delete_invoice_record(
 ) -> InvoiceDeleteResponse:
     """
     Delete an invoice record and associated receipt image.
-    
+
     Auth
     - Handled by get_authenticated_user dependency
     - Extracts user_id and access_token from Supabase Auth token
@@ -750,12 +751,12 @@ async def delete_invoice_record(
     - Service layer handles deletion via authenticated Supabase client
     - Service also deletes receipt image from Supabase Storage
     """
-    
+
     logger.info(f"Deleting invoice {invoice_id} for user {auth_user.user_id}")
-    
+
     # Create authenticated Supabase client
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         # Soft-delete invoice via RPC (service handles RLS enforcement)
         success, deleted_at = await delete_invoice(
@@ -763,7 +764,7 @@ async def delete_invoice_record(
             user_id=auth_user.user_id,
             invoice_id=invoice_id,
         )
-        
+
         if not success:
             logger.warning(
                 f"Invoice {invoice_id} not found or not accessible by user {auth_user.user_id}"
@@ -775,16 +776,16 @@ async def delete_invoice_record(
                     "details": f"Invoice {invoice_id} not found or not accessible"
                 }
             )
-        
+
         logger.info(f"Invoice {invoice_id} soft-deleted successfully for user {auth_user.user_id} at {deleted_at}")
-        
+
         return InvoiceDeleteResponse(
             status="DELETED",
             invoice_id=str(invoice_id),
             deleted_at=str(deleted_at),
             message="Invoice soft-deleted successfully"
         )
-        
+
     except HTTPException:
         # Re-raise HTTP exceptions
         raise

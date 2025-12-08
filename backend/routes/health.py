@@ -37,17 +37,17 @@ router = APIRouter()
 async def health_check() -> HealthResponse:
     """
     Public health check endpoint.
-    
+
     This endpoint is explicitly documented as PUBLIC - no authentication required.
-    
+
     Returns:
         HealthResponse: Simple status object with "ok" status
-    
+
     Example response:
         {
             "status": "ok"
         }
     """
     logger.debug("Health check endpoint called")
-    
+
     return HealthResponse(status="ok")

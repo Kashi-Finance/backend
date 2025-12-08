@@ -24,26 +24,26 @@ from typing import Optional
 def get_logger(name: str, level: Optional[int] = None) -> logging.Logger:
     """
     Get a configured logger for the specified module.
-    
+
     Args:
         name: Module name (typically __name__)
         level: Optional logging level (defaults to INFO)
-    
+
     Returns:
         Configured logger instance
-    
+
     Usage:
         >>> from backend.utils.logging import get_logger
         >>> logger = get_logger(__name__)
         >>> logger.info("High-level event occurred")
     """
     logger = logging.getLogger(name)
-    
+
     if level is None:
         level = logging.INFO
-    
+
     logger.setLevel(level)
-    
+
     # Add handler if not already configured (avoid duplicate handlers)
     if not logger.handlers:
         handler = logging.StreamHandler()
@@ -53,5 +53,5 @@ def get_logger(name: str, level: Optional[int] = None) -> logging.Logger:
         )
         handler.setFormatter(formatter)
         logger.addHandler(handler)
-    
+
     return logger

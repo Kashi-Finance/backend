@@ -8,27 +8,35 @@ per DB rules.
 
 import logging
 from typing import Annotated, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Path, Body, Query
 
-from backend.auth.dependencies import get_authenticated_user, AuthenticatedUser
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status
+
+from backend.auth.dependencies import AuthenticatedUser, get_authenticated_user
 from backend.db.client import get_supabase_client
-from backend.services.account_service import (
-    get_user_accounts,
-    get_account_by_id,
-    create_account,
-    update_account,
-    delete_account_with_reassignment,
-    delete_account_with_transactions,
-)
 from backend.schemas.accounts import (
-    AccountResponse,
     AccountCreateRequest,
     AccountCreateResponse,
-    AccountUpdateRequest,
-    AccountUpdateResponse,
     AccountDeleteRequest,
     AccountDeleteResponse,
     AccountListResponse,
+    AccountResponse,
+    AccountUpdateRequest,
+    AccountUpdateResponse,
+    ClearFavoriteAccountResponse,
+    GetFavoriteAccountResponse,
+    SetFavoriteAccountRequest,
+    SetFavoriteAccountResponse,
+)
+from backend.services.account_service import (
+    clear_favorite_account,
+    create_account,
+    delete_account_with_reassignment,
+    delete_account_with_transactions,
+    get_account_by_id,
+    get_favorite_account,
+    get_user_accounts,
+    set_favorite_account,
+    update_account,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,13 +51,13 @@ router = APIRouter(prefix="/accounts", tags=["accounts"])
     summary="List user accounts",
     description="""
     Retrieve all accounts belonging to the authenticated user.
-    
+
     This endpoint:
     - Returns all user's financial accounts
     - Ordered by creation date (newest first)
     - Only accessible to the account owner (RLS enforced)
     - Supports pagination via limit/offset
-    
+
     Security:
     - Requires valid Authorization Bearer token
     - RLS ensures users only see their own accounts
@@ -62,31 +70,31 @@ async def list_accounts(
 ) -> AccountListResponse:
     """
     List all accounts for the authenticated user.
-    
+
     **6-STEP ENDPOINT FLOW:**
-    
+
     Auth
     - Handled by get_authenticated_user dependency
-    
+
     Parse/Validate Request
     - Query parameters validated by FastAPI (limit, offset)
-    
+
     Domain & Intent Filter
     - Simple list request, no filtering needed
-    
+
     Call Service
     - Call get_user_accounts() service function with pagination
-    
+
     Map Output -> ResponseModel
     - Convert accounts list to AccountListResponse
-    
+
     Persistence
     - Read-only operation (no persistence needed)
     """
     logger.info(f"Listing accounts for user {auth_user.user_id} (limit={limit}, offset={offset})")
-    
+
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         accounts = await get_user_accounts(
             supabase_client=supabase_client,
@@ -94,11 +102,11 @@ async def list_accounts(
             limit=limit,
             offset=offset
         )
-        
+
         # Helper to coerce DB values to strings
         def _as_str(v: Any) -> str:
             return str(v) if v is not None else ""
-        
+
         account_responses = [
             AccountResponse(
                 id=_as_str(acc.get("id")),
@@ -117,16 +125,16 @@ async def list_accounts(
             )
             for acc in accounts
         ]
-        
+
         logger.info(f"Returning {len(account_responses)} accounts for user {auth_user.user_id}")
-        
+
         return AccountListResponse(
             accounts=account_responses,
             count=len(account_responses),
             limit=limit,
             offset=offset
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to list accounts for user {auth_user.user_id}: {e}", exc_info=True)
         raise HTTPException(
@@ -145,12 +153,12 @@ async def list_accounts(
     summary="Create account",
     description="""
     Create a new financial account.
-    
+
     This endpoint:
     - Creates a new account (cash, bank, credit card, etc.)
     - Validates account type matches DB constraints
     - Returns the created account details
-    
+
     Security:
     - Requires valid Authorization Bearer token
     - RLS ensures account is owned by authenticated user
@@ -162,37 +170,38 @@ async def create_new_account(
 ) -> AccountCreateResponse:
     """
     Create a new account.
-    
+
     **6-STEP ENDPOINT FLOW:**
-    
+
     Step 1: Auth
     - Handled by get_authenticated_user dependency
-    
+
     Step 2: Parse/Validate Request
     - FastAPI validates AccountCreateRequest automatically
-    
+
     Step 3: Domain & Intent Filter
     - Validate account type is in allowed enum
-    
+
     Step 4: Call Service
     - Call create_account() service function
-    
+
     Step 5: Map Output -> ResponseModel
     - Convert created account to AccountCreateResponse
-    
+
     Step 6: Persistence
     - Service layer handles database insert
     """
     logger.info(f"Creating account for user {auth_user.user_id}: {request.name}")
-    
+
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         # Import transaction service for initial balance
+        from datetime import datetime, timezone
+
         from backend.services.transaction_service import create_transaction
         from backend.utils.constants import SYSTEM_GENERATED_KEYS
-        from datetime import datetime, timezone
-        
+
         created_account = await create_account(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
@@ -205,16 +214,16 @@ async def create_new_account(
             is_pinned=request.is_pinned,
             description=request.description
         )
-        
+
         account_id = created_account.get("id")
-        
+
         # Create initial balance transaction if provided
         if request.initial_balance is not None and request.initial_balance > 0:
             logger.info(
                 f"Creating initial balance transaction: "
                 f"account={account_id}, amount={request.initial_balance}"
             )
-            
+
             # Fetch system category with key="initial_balance" and flow_type="income"
             # This is a system category (user_id=NULL) used for opening account balances
             category_response = supabase_client.from_("category").select("id").eq(
@@ -224,7 +233,7 @@ async def create_new_account(
             ).is_(
                 "user_id", "null"
             ).execute()
-            
+
             if not category_response.data or len(category_response.data) == 0:
                 logger.error("System category 'initial_balance' with flow_type='income' not found")
                 raise HTTPException(
@@ -234,7 +243,7 @@ async def create_new_account(
                         "details": "Required system category for initial balance not found. Please contact support."
                     }
                 )
-            
+
             category_dict = category_response.data[0]
             if not isinstance(category_dict, dict):
                 logger.error(f"Unexpected category data type: {type(category_dict)}")
@@ -245,10 +254,10 @@ async def create_new_account(
                         "details": "Invalid system category data structure"
                     }
                 )
-            
+
             initial_balance_category_id = str(category_dict.get("id"))
             logger.debug(f"Using system category for initial balance: {initial_balance_category_id}")
-            
+
             await create_transaction(
                 supabase_client=supabase_client,
                 user_id=auth_user.user_id,
@@ -260,9 +269,9 @@ async def create_new_account(
                 description="Initial balance",
                 system_generated_key=SYSTEM_GENERATED_KEYS['INITIAL_BALANCE']
             )
-            
+
             logger.info(f"Initial balance transaction created for account {account_id}")
-            
+
             # CRITICAL FIX: Re-fetch account to get updated cached_balance
             # The create_transaction service now calls recompute_account_balance(),
             # but created_account dict is stale. We must fetch the fresh data.
@@ -272,15 +281,15 @@ async def create_new_account(
                 user_id=auth_user.user_id,
                 account_id=str(account_id)
             )
-            
+
             if updated_account:
                 created_account = updated_account
                 logger.debug(f"Account re-fetched after initial balance: cached_balance={created_account.get('cached_balance')}")
-        
+
         # Helper to coerce DB values to strings
         def _as_str(v: Any) -> str:
             return str(v) if v is not None else ""
-        
+
         account_response = AccountResponse(
             id=_as_str(created_account.get("id")),
             user_id=_as_str(created_account.get("user_id")),
@@ -296,15 +305,15 @@ async def create_new_account(
             created_at=_as_str(created_account.get("created_at")),
             updated_at=_as_str(created_account.get("updated_at")),
         )
-        
+
         logger.info(f"Account created successfully: {account_response.id}")
-        
+
         return AccountCreateResponse(
             status="CREATED",
             account=account_response,
             message="Account created successfully"
         )
-        
+
     except ValueError as e:
         # Currency validation error from service layer
         logger.warning(f"Currency validation failed for user {auth_user.user_id}: {e}")
@@ -333,18 +342,6 @@ async def create_new_account(
 # NOTE: These routes MUST be defined before /{account_id} routes to prevent
 # "/favorite" being matched as an account_id parameter.
 
-from backend.services.account_service import (
-    set_favorite_account,
-    clear_favorite_account,
-    get_favorite_account,
-)
-from backend.schemas.accounts import (
-    SetFavoriteAccountRequest,
-    SetFavoriteAccountResponse,
-    ClearFavoriteAccountResponse,
-    GetFavoriteAccountResponse,
-)
-
 
 @router.get(
     "/favorite",
@@ -353,9 +350,9 @@ from backend.schemas.accounts import (
     summary="Get favorite account",
     description="""
     Get the user's favorite account ID.
-    
+
     Returns null if no favorite is set.
-    
+
     Security:
     - Requires valid Authorization Bearer token
     """
@@ -365,20 +362,20 @@ async def get_favorite(
 ) -> GetFavoriteAccountResponse:
     """Get the user's favorite account ID."""
     logger.debug(f"Getting favorite account for user {auth_user.user_id}")
-    
+
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         favorite_id = await get_favorite_account(
             supabase_client=supabase_client,
             user_id=auth_user.user_id
         )
-        
+
         return GetFavoriteAccountResponse(
             status="OK",
             favorite_account_id=favorite_id
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to get favorite account: {e}", exc_info=True)
         raise HTTPException(
@@ -394,11 +391,11 @@ async def get_favorite(
     summary="Set favorite account",
     description="""
     Set an account as the user's favorite.
-    
+
     The favorite account is auto-selected when creating manual transactions.
-    Only one account per user can be marked as favorite - setting a new 
+    Only one account per user can be marked as favorite - setting a new
     favorite automatically clears the previous one.
-    
+
     Security:
     - Requires valid Authorization Bearer token
     - Only the account owner can set their favorite
@@ -410,30 +407,30 @@ async def set_favorite(
 ) -> SetFavoriteAccountResponse:
     """Set an account as the user's favorite."""
     logger.info(f"Setting favorite account {request.account_id} for user {auth_user.user_id}")
-    
+
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         result = await set_favorite_account(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
             account_id=request.account_id
         )
-        
+
         previous_id = result.get('previous_favorite_id')
         message = "Account set as favorite"
         if previous_id and previous_id != request.account_id:
-            message = f"Account set as favorite (previous favorite cleared)"
+            message = "Account set as favorite (previous favorite cleared)"
         elif result.get('new_favorite_id') == request.account_id:
             message = "Account is now favorite"
-        
+
         return SetFavoriteAccountResponse(
             status="OK",
             previous_favorite_id=previous_id,
             new_favorite_id=result.get('new_favorite_id', request.account_id),
             message=message
         )
-        
+
     except Exception as e:
         error_msg = str(e)
         if "not found" in error_msg.lower():
@@ -446,7 +443,7 @@ async def set_favorite(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"error": "forbidden", "details": "Account does not belong to user"}
             )
-        
+
         logger.error(f"Failed to set favorite account: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -461,9 +458,9 @@ async def set_favorite(
     summary="Clear favorite account",
     description="""
     Clear the favorite status from an account.
-    
+
     After clearing, no account will be marked as favorite until a new one is set.
-    
+
     Security:
     - Requires valid Authorization Bearer token
     - Only the account owner can clear their favorite
@@ -475,24 +472,24 @@ async def clear_favorite(
 ) -> ClearFavoriteAccountResponse:
     """Clear favorite status from an account."""
     logger.info(f"Clearing favorite status from account {account_id} for user {auth_user.user_id}")
-    
+
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         was_cleared = await clear_favorite_account(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
             account_id=account_id
         )
-        
+
         message = "Favorite status cleared" if was_cleared else "Account was not favorite"
-        
+
         return ClearFavoriteAccountResponse(
             status="OK",
             cleared=was_cleared,
             message=message
         )
-        
+
     except Exception as e:
         error_msg = str(e)
         if "not found" in error_msg.lower():
@@ -500,7 +497,7 @@ async def clear_favorite(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": "not_found", "details": "Account not found"}
             )
-        
+
         logger.error(f"Failed to clear favorite account: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -517,11 +514,11 @@ async def clear_favorite(
     summary="Get account details",
     description="""
     Retrieve details of a single account by ID.
-    
+
     This endpoint:
     - Returns account details for the specified ID
     - Only accessible to the account owner (RLS enforced)
-    
+
     Security:
     - Requires valid Authorization Bearer token
     - Returns 404 if account doesn't exist or belongs to another user
@@ -533,16 +530,16 @@ async def get_account(
 ) -> AccountResponse:
     """Get account by ID."""
     logger.info(f"Fetching account {account_id} for user {auth_user.user_id}")
-    
+
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         account = await get_account_by_id(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
             account_id=account_id
         )
-        
+
         if not account:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -551,11 +548,11 @@ async def get_account(
                     "details": "Account not found"
                 }
             )
-        
+
         # Helper to coerce DB values to strings
         def _as_str(v: Any) -> str:
             return str(v) if v is not None else ""
-        
+
         return AccountResponse(
             id=_as_str(account.get("id")),
             user_id=_as_str(account.get("user_id")),
@@ -571,7 +568,7 @@ async def get_account(
             created_at=_as_str(account.get("created_at")),
             updated_at=_as_str(account.get("updated_at")),
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -592,12 +589,12 @@ async def get_account(
     summary="Update account",
     description="""
     Update account details.
-    
+
     This endpoint:
     - Accepts partial updates (only provided fields are updated)
     - Returns the complete updated account
     - Requires valid Authorization Bearer token
-    
+
     Security:
     - Only the account owner can update their account
     - RLS enforces user_id = auth.uid()
@@ -610,10 +607,10 @@ async def update_existing_account(
 ) -> AccountUpdateResponse:
     """Update account details."""
     logger.info(f"Updating account {account_id} for user {auth_user.user_id}")
-    
+
     # Extract non-None updates
     updates = request.model_dump(exclude_none=True)
-    
+
     if not updates:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -622,9 +619,9 @@ async def update_existing_account(
                 "details": "At least one field must be provided for update"
             }
         )
-    
+
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         updated_account = await update_account(
             supabase_client=supabase_client,
@@ -632,7 +629,7 @@ async def update_existing_account(
             account_id=account_id,
             **updates
         )
-        
+
         if not updated_account:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -641,11 +638,11 @@ async def update_existing_account(
                     "details": "Account not found"
                 }
             )
-        
+
         # Helper to coerce DB values to strings
         def _as_str(v: Any) -> str:
             return str(v) if v is not None else ""
-        
+
         account_response = AccountResponse(
             id=_as_str(updated_account.get("id")),
             user_id=_as_str(updated_account.get("user_id")),
@@ -661,15 +658,15 @@ async def update_existing_account(
             created_at=_as_str(updated_account.get("created_at")),
             updated_at=_as_str(updated_account.get("updated_at")),
         )
-        
+
         logger.info(f"Account {account_id} updated successfully")
-        
+
         return AccountUpdateResponse(
             status="UPDATED",
             account=account_response,
             message="Account updated successfully"
         )
-        
+
     except ValueError as e:
         # Currency change attempt blocked by service layer
         logger.warning(f"Account update blocked for {account_id}: {e}")
@@ -700,16 +697,16 @@ async def update_existing_account(
     summary="Delete account",
     description="""
     Delete an account using one of two strategies per DB delete rule.
-    
+
     **Strategy 1: 'reassign'**
     - Reassigns all transactions to another account (target_account_id required)
     - Then deletes the account
-    
+
     **Strategy 2: 'delete_transactions'**
     - Deletes all transactions for this account
     - Handles paired transfers (clears references)
     - Then deletes the account
-    
+
     Security:
     - Requires valid Authorization Bearer token
     - Only the account owner can delete their account
@@ -726,7 +723,7 @@ async def delete_existing_account(
         f"Deleting account {account_id} for user {auth_user.user_id} "
         f"with strategy '{request.strategy}'"
     )
-    
+
     # Validate strategy requirements. We use a consistent request envelope where
     # `target_account_id` is always present in the body. For `delete_transactions`
     # this field must be explicitly null; for `reassign` it must be a non-null UUID.
@@ -748,9 +745,9 @@ async def delete_existing_account(
                     "details": "target_account_id must be null when strategy='delete_transactions'"
                 }
             )
-    
+
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         if request.strategy == "reassign":
             transactions_affected = await delete_account_with_reassignment(
@@ -771,18 +768,18 @@ async def delete_existing_account(
                 f"Account soft-deleted successfully. "
                 f"{recurring_count} recurring templates and {transaction_count} transactions soft-deleted."
             )
-        
+
         logger.info(
             f"Account {account_id} soft-deleted successfully. "
             f"{transactions_affected} transactions affected."
         )
-        
+
         return AccountDeleteResponse(
             status="DELETED",
             message=message,
             transactions_affected=transactions_affected
         )
-        
+
     except ValueError as e:
         logger.error(f"Invalid delete request: {e}")
         raise HTTPException(
