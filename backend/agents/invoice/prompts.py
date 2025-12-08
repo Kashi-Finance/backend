@@ -4,7 +4,7 @@ InvoiceAgent Prompt Templates
 Contains both the system prompt and user prompt builder for InvoiceAgent.
 
 The InvoiceAgent is implemented as a single-shot multimodal workflow (not an ADK agent).
-All required user context (user profile, currency preference, and user categories) is 
+All required user context (user profile, currency preference, and user categories) is
 provided by the caller. The agent MUST NOT attempt to call external tools or services.
 
 Architecture:
@@ -19,8 +19,7 @@ Prompt Engineering Pattern:
 - User prompt contains task-specific instructions and context
 """
 
-from typing import List, Dict
-
+from typing import Dict, List
 
 # =============================================================================
 # SYSTEM PROMPT
@@ -78,32 +77,32 @@ def build_invoice_agent_user_prompt(
 ) -> str:
     """
     Build the user prompt for InvoiceAgent with complete context.
-    
+
     This function generates the dynamic user prompt that includes:
     - User context (user_id, country, currency_preference)
     - User's existing expense categories for matching
     - Clear task instructions with examples
     - Output schema requirements
-    
+
     Args:
         user_id: Authenticated user UUID from Supabase Auth token
         user_categories: List of user's expense categories from endpoint
         country: User's country code (e.g., "GT")
         currency_preference: User's preferred currency (e.g., "GTQ")
-        
+
     Returns:
         str: Formatted user prompt ready to be sent to Gemini with the receipt image
     """
     # Format user categories in a clear, LLM-friendly format
     categories_list = []
     for cat in user_categories:
-        cat_id = cat.get("id") or cat.get("category_id") 
+        cat_id = cat.get("id") or cat.get("category_id")
         cat_name = cat.get("name") or cat.get("category_name")
         if cat_id and cat_name:
             categories_list.append(f'  - id: "{cat_id}" | name: "{cat_name}"')
-    
+
     categories_text = "\n".join(categories_list) if categories_list else "  (No categories available)"
-    
+
     return f"""Extract structured invoice data from the attached receipt image.
 
 <context>
@@ -136,7 +135,7 @@ You MUST follow these rules exactly:
 **Case 1: Match found in user_categories**
 - Set match_type = "EXISTING"
 - Set category_id = exact ID from user_categories above
-- Set category_name = exact name from user_categories above  
+- Set category_name = exact name from user_categories above
 - Set proposed_name = null
 
 **Case 2: No match found, suggest new category**
@@ -163,7 +162,7 @@ Output category_suggestion:
 </example>
 
 <example>
-Input: Pet store receipt from "Mundo Mascota"  
+Input: Pet store receipt from "Mundo Mascota"
 User has NO pet-related category
 
 Output category_suggestion:

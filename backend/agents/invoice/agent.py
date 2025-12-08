@@ -5,20 +5,20 @@ Single-shot LLM extraction workflow. Processes receipt images using Gemini
 with a complete context prompt (no iterative function calling).
 """
 
-import logging
 import base64
 import json
-from typing import List, Dict, Optional
+import logging
+from typing import Dict, List, Optional
 
 from google import genai
 from google.genai import types
 
-from backend.config import settings
-from backend.agents.invoice.types import InvoiceAgentOutput, CategorySuggestion
 from backend.agents.invoice.prompts import (
     INVOICE_AGENT_SYSTEM_PROMPT,
-    build_invoice_agent_user_prompt
+    build_invoice_agent_user_prompt,
 )
+from backend.agents.invoice.types import CategorySuggestion, InvoiceAgentOutput
+from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -32,27 +32,27 @@ def run_invoice_agent(
 ) -> InvoiceAgentOutput:
     """
     Process an invoice/receipt image and extract structured data using Gemini.
-    
+
     This is a single-shot multimodal LLM extraction workflow that:
     1. Receives an invoice image (base64) + complete user context
     2. Makes one vision call to Gemini with structured JSON output
     3. Returns validated InvoiceAgentOutput
-    
+
     Args:
         user_id: Authenticated user UUID from Supabase Auth (NEVER from client)
         user_categories: List of user's expense categories (from endpoint)
         receipt_image_base64: Base64-encoded invoice image (REQUIRED)
         country: User's country code (e.g. "GT")
         currency_preference: User's preferred currency (e.g. "GTQ")
-        
+
     Returns:
         InvoiceAgentOutput with status DRAFT, INVALID_IMAGE, or OUT_OF_SCOPE
-        
+
     Security:
         - Assumes backend has validated Supabase token and resolved user_id
         - Does NOT log full invoice images or sensitive financial data
         - Does NOT write to database (persistence handled by API layer)
-    
+
     Notes:
         - This is NOT an ADK agent with tools - it's a deterministic multimodal LLM workflow
         - Receipt image is REQUIRED for processing
@@ -61,7 +61,7 @@ def run_invoice_agent(
         - Uses Gemini's native vision capabilities to read the image
     """
     logger.info(f"InvoiceAgent invoked for user_id={user_id}")
-    
+
     # Validate that image is provided
     if not receipt_image_base64:
         logger.error("receipt_image_base64 is required but not provided")
@@ -76,7 +76,7 @@ def run_invoice_agent(
             "extracted_text": None,
             "reason": "Receipt image is required"
         }
-    
+
     # Check if Google API key is configured
     if not settings.GOOGLE_API_KEY:
         logger.error("GOOGLE_API_KEY not configured")
@@ -84,11 +84,11 @@ def run_invoice_agent(
             "GOOGLE_API_KEY is not configured. "
             "Please set it in your .env file to use InvoiceAgent."
         )
-    
+
     try:
         # Initialize Gemini client
         client = genai.Client(api_key=settings.GOOGLE_API_KEY)
-        
+
         # Build the user prompt with dynamic context
         prompt_text = build_invoice_agent_user_prompt(
             user_id=user_id,
@@ -96,7 +96,7 @@ def run_invoice_agent(
             country=country,
             currency_preference=currency_preference
         )
-        
+
         # Build multimodal content with image
         # Detect MIME type from base64 header or default to jpeg
         mime_type = "image/jpeg"  # default
@@ -108,7 +108,7 @@ def run_invoice_agent(
             mime_type = "image/gif"
         elif receipt_image_base64.startswith("UklGR"):
             mime_type = "image/webp"
-        
+
         prompt_parts = [
             types.Part(text=prompt_text),
             types.Part(
@@ -118,14 +118,14 @@ def run_invoice_agent(
                 )
             )
         ]
-        
+
         # Configure generation (no tools, single-shot)
         config = types.GenerateContentConfig(
             system_instruction=INVOICE_AGENT_SYSTEM_PROMPT,
             temperature=0.0,  # Deterministic for structured extraction
             response_mime_type="application/json"
         )
-        
+
         # Single LLM call with complete context
         logger.debug("Sending single-shot request to Gemini with complete context")
         response = client.models.generate_content(
@@ -133,7 +133,7 @@ def run_invoice_agent(
             contents=prompt_parts,  # type: ignore
             config=config
         )
-        
+
         # Extract and parse response
         if not response.candidates or not response.candidates[0].content:
             logger.error("No response from model")
@@ -148,11 +148,11 @@ def run_invoice_agent(
                 "extracted_text": None,
                 "reason": "Model did not return a response"
             }
-        
+
         # Parse response text as JSON
         response_text = (response.text or "").strip()
         logger.debug(f"Raw response text: {response_text[:200]}...")
-        
+
         try:
             result = json.loads(response_text)
         except json.JSONDecodeError as e:
@@ -169,12 +169,12 @@ def run_invoice_agent(
                 "extracted_text": None,
                 "reason": "Failed to parse model response"
             }
-        
+
         # Validate and return the output
         status = result.get("status", "INVALID_IMAGE")
-        
+
         logger.info(f"InvoiceAgent completed: status={status}")
-        
+
         # Normalize category_suggestion to ensure all 4 fields are present
         category_suggestion_normalized: Optional[CategorySuggestion] = None
         category_suggestion_raw = result.get("category_suggestion")
@@ -186,7 +186,7 @@ def run_invoice_agent(
                 "proposed_name": category_suggestion_raw.get("proposed_name")
             }
             logger.debug(f"Normalized category_suggestion: {category_suggestion_normalized}")
-        
+
         # Ensure the result matches InvoiceAgentOutput schema
         output: InvoiceAgentOutput = {
             "status": status,
@@ -199,9 +199,9 @@ def run_invoice_agent(
             "extracted_text": result.get("extracted_text"),
             "reason": result.get("reason")
         }
-        
+
         return output
-        
+
     except Exception as e:
         logger.error(f"InvoiceAgent error: {e}", exc_info=True)
         return {

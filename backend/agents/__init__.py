@@ -7,25 +7,28 @@ Contains implementations of AI-powered workflows:
    - Uses Gemini vision for OCR and structured extraction from receipts
    - NOT an ADK agent - uses direct Gemini API
 
-2. Recommendation System (Prompt Chaining Workflow)
-   - Uses DeepSeek V3.2 for product recommendations
-   - NOT an ADK agent - uses OpenAI-compatible API
+2. Recommendation System (Web-Grounded LLM)
+   - Uses Gemini with Google Search grounding for product recommendations
+   - NOT an ADK agent - uses Google Gen AI SDK with Google Search tool
    - Located in: backend/services/recommendation_service.py
 
-ARCHITECTURE NOTE (November 2025):
-The project uses simplified LLM workflows instead of complex multi-agent 
-architectures. The previous ADK Orchestrator-Workers pattern for recommendations 
-was replaced with Prompt Chaining for improved reliability, cost, and maintainability.
+The project uses simplified LLM workflows instead of complex multi-agent
+architectures. The recommendation system uses Gemini with Google Search grounding
+for real, web-verified product recommendations.
 
 See .github/instructions/adk-agents.instructions.md for details.
 """
 
 from backend.agents.invoice import (
-    run_invoice_agent,
+    INPUT_SCHEMA as INVOICE_INPUT_SCHEMA,
+)
+from backend.agents.invoice import (
+    OUTPUT_SCHEMA as INVOICE_OUTPUT_SCHEMA,
+)
+from backend.agents.invoice import (
     InvoiceAgentInput,
     InvoiceAgentOutput,
-    INPUT_SCHEMA as INVOICE_INPUT_SCHEMA,
-    OUTPUT_SCHEMA as INVOICE_OUTPUT_SCHEMA,
+    run_invoice_agent,
 )
 
 __all__ = [

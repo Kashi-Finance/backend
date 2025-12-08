@@ -5,7 +5,7 @@ Strictly typed input/output contracts for InvoiceAgent.
 All types are JSON-serializable and compatible with Pydantic.
 """
 
-from typing import TypedDict, Literal, Optional
+from typing import Literal, Optional, TypedDict
 
 
 class PurchasedItem(TypedDict):
@@ -36,7 +36,7 @@ class InvoiceAgentInput(TypedDict):
 class InvoiceAgentOutput(TypedDict):
     """Output schema for InvoiceAgent."""
     status: Literal["DRAFT", "INVALID_IMAGE", "OUT_OF_SCOPE"]
-    
+
     # Present when status == "DRAFT"
     store_name: Optional[str]
     transaction_time: Optional[str]  # ISO-8601 datetime string
@@ -45,6 +45,6 @@ class InvoiceAgentOutput(TypedDict):
     purchased_items: Optional[list[PurchasedItem]]
     category_suggestion: Optional[CategorySuggestion]
     extracted_text: Optional[str]  # Canonical multi-line snapshot
-    
+
     # Present when status != "DRAFT"
     reason: Optional[str]  # Short factual explanation
