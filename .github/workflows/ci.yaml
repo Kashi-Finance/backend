@@ -3,61 +3,141 @@ name: CI
 on:
   push:
     branches:
-      - "feature/*"
-      - "fix/*"
+      - "feature/**"
+      - "fix/**"
+      - develop  # Run CI on develop too (for CD to wait on)
+      - main     # Run CI on main too (for CD to wait on)
   pull_request:
     branches:
       - develop
       - main
   workflow_dispatch:
 
+# Cancel in-progress runs when a new run is triggered for the same branch
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  ci:
+  lint-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    outputs:
+      tests-passed: ${{ steps.test-result.outputs.passed }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python (for backend tests / linters)
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
-      - name: Run static type check
-        run: |
-          pip install mypy
-          mypy backend
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v1
+        with:
+          version: "0.9.9"
+          enable-cache: true
 
-      - name: Install backend deps
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run static type check (mypy)
         run: |
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          fi
+          uv run mypy backend --ignore-missing-imports --check-untyped-defs
+
+      - name: Lint code with ruff
+        run: |
+          uv run ruff check backend/ --output-format=github
 
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v1
         with:
           version: latest
 
-      - name: Start local Supabase stack (Postgres + services)
+      - name: Start local Supabase stack
         run: supabase db start
 
-      - name: Verify generated DB types are committed
+      - name: Verify migrations are valid
         run: |
-          supabase db diff --local > schema_diff.sql || true
+          supabase db reset --local
+          echo "✅ All migrations applied successfully"
+
+      - name: Verify no uncommitted schema changes
+        run: |
+          supabase db diff --local --use-migra > schema_diff.sql || true
           if [ -s schema_diff.sql ]; then
-            echo "Database schema differences detected! Please update your Supabase project or local schema."
+            echo "⚠️ Database schema differences detected!"
+            echo "Please create a migration for these changes:"
             cat schema_diff.sql
             exit 1
-          else
-            echo "Database schema is up to date."
           fi
+          echo "✅ Database schema is up to date with migrations"
 
       - name: Run backend tests
+        id: test-result
         run: |
-          if [ -d tests ]; then
-            pytest -q
+          if uv run pytest tests/ -v --tb=short --maxfail=5; then
+            echo "passed=true" >> $GITHUB_OUTPUT
           else
-            echo "No tests/ directory found, skipping pytest."
+            echo "passed=false" >> $GITHUB_OUTPUT
+            exit 1
           fi
+        env:
+          VALIDATE_CONFIG: "false"
+          ENVIRONMENT: "testing"
+          SUPABASE_URL: "http://localhost:54321"
+          SUPABASE_PUBLISHABLE_KEY: "test-publishable-key"
+          GOOGLE_API_KEY: "test-google-api-key"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-results
+          path: |
+            junit/test-results-*.xml
+            htmlcov/
+        continue-on-error: true
+
+  docker-build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: lint-and-test  # Only build Docker if tests pass
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (test build only)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: kashi-backend:ci-test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+      - name: Test Docker image runs
+        run: |
+          docker run --rm -d \
+            --name kashi-test \
+            -p 8080:8080 \
+            -e ENVIRONMENT=testing \
+            -e VALIDATE_CONFIG=false \
+            -e SUPABASE_URL=http://host.docker.internal:54321 \
+            -e SUPABASE_PUBLISHABLE_KEY=test-key \
+            -e GOOGLE_API_KEY=test-key \
+            kashi-backend:ci-test
+          
+          sleep 5
+          curl -f http://localhost:8080/health || (docker logs kashi-test && exit 1)
+          docker stop kashi-test
