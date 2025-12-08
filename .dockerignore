@@ -13,6 +13,8 @@ __pycache__/
 *.so
 .Python
 *.pyc
+.mypy_cache/
+.ruff_cache/
 
 # Virtual environments
 venv/
@@ -35,23 +37,20 @@ htmlcov/
 *.cover
 .hypothesis/
 .tox/
+tests/
 
 # Documentation and markdown files (not needed in container)
 *.md
 docs/
-
-# Text files - EXCEPT requirements.txt which is needed for build
-*.txt
-!requirements.txt
+DECISIONS/
 
 # Configuration files (should be set via environment variables)
 .env
 .env.*
 *.env
 
-# Supabase local development
-supabase/.branches/
-supabase/.temp/
+# Supabase local development (entire folder not needed in container)
+supabase/
 
 # Scripts and development tools
 scripts/
