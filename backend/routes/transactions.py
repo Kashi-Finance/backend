@@ -8,28 +8,29 @@ They may be created manually by users or automatically from invoice OCR.
 """
 
 import logging
-from typing import Annotated, Optional, cast, Literal
+from typing import Annotated, Literal, Optional, cast
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from backend.auth.dependencies import get_authenticated_user, AuthenticatedUser
+from backend.auth.dependencies import AuthenticatedUser, get_authenticated_user
 from backend.db.client import get_supabase_client
-from backend.services import (
-    create_transaction,
-    get_user_transactions,
-    get_transaction_by_id,
-    update_transaction,
-    delete_transaction,
-)
-from backend.services.engagement_service import update_streak_after_activity
 from backend.schemas.transactions import (
     TransactionCreateRequest,
     TransactionCreateResponse,
-    TransactionListResponse,
+    TransactionDeleteResponse,
     TransactionDetailResponse,
+    TransactionListResponse,
     TransactionUpdateRequest,
     TransactionUpdateResponse,
-    TransactionDeleteResponse,
 )
+from backend.services import (
+    create_transaction,
+    delete_transaction,
+    get_transaction_by_id,
+    get_user_transactions,
+    update_transaction,
+)
+from backend.services.engagement_service import update_streak_after_activity
 
 logger = logging.getLogger(__name__)
 
@@ -71,17 +72,17 @@ def _coerce_str(data: dict, key: str) -> str:
     summary="Create a new transaction",
     description="""
     Create a new transaction manually.
-    
+
     This endpoint:
     - Accepts transaction data from the frontend
     - Inserts record into the transaction table with RLS enforcement
     - Returns the created transaction ID and details
-    
+
     Use this for:
     - Manual transaction entry by user
     - Recording cash expenses
     - Income transactions
-    
+
     Security:
     - Requires valid Authorization Bearer token
     - RLS ensures user can only create transactions for themselves
@@ -93,40 +94,40 @@ async def create_transaction_record(
 ) -> TransactionCreateResponse:
     """
     Create a new transaction manually.
-    
+
     **6-STEP ENDPOINT FLOW:**
-    
+
     Step 1: Auth
     - Handled by get_authenticated_user dependency
     - Extracts user_id and access_token from Supabase Auth
-    
+
     Step 2: Parse/Validate Request
     - FastAPI validates TransactionCreateRequest automatically
     - Ensures all required fields are present
-    
+
     Step 3: Domain & Intent Filter
     - Validate that this is a valid transaction creation request
     - Check that required fields are non-empty
-    
+
     Step 4: Call Service
     - Call create_transaction() service function
     - Service handles RLS enforcement
-    
+
     Step 5: Map Output -> ResponseModel
     - Return TransactionCreateResponse with transaction details
-    
+
     Step 6: Persistence
     - Service layer handles persistence via authenticated Supabase client
     """
-    
+
     logger.info(
         f"Creating transaction for user_id={auth_user.user_id}, "
         f"account={request.account_id}, amount={request.amount}, flow_type={request.flow_type}"
     )
-    
+
     # Create authenticated Supabase client (RLS enforced)
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         # Persist transaction to database
         created_transaction = await create_transaction(
@@ -139,12 +140,12 @@ async def create_transaction_record(
             date=request.date,
             description=request.description,
         )
-        
+
         transaction_id = created_transaction.get("id")
-        
+
         if not transaction_id:
             raise Exception("Transaction created but no ID returned")
-        
+
         # Update streak after successful transaction creation (non-blocking)
         try:
             await update_streak_after_activity(
@@ -156,7 +157,7 @@ async def create_transaction_record(
             logger.warning(
                 f"Failed to update streak for user_id={auth_user.user_id}: {streak_err}"
             )
-        
+
         # Map to response model (validate and coerce required fields)
         transaction_detail = TransactionDetailResponse(
             id=str(transaction_id),
@@ -173,19 +174,19 @@ async def create_transaction_record(
             created_at=_coerce_str(created_transaction, "created_at"),
             updated_at=created_transaction.get("updated_at"),
         )
-        
+
         logger.info(
             f"Transaction created successfully: "
             f"id={transaction_id}, user_id={auth_user.user_id}"
         )
-        
+
         return TransactionCreateResponse(
             status="CREATED",
             transaction_id=str(transaction_id),
             transaction=transaction_detail,
             message="Transaction created successfully"
         )
-        
+
     except ValueError as e:
         logger.error(f"Invalid transaction data: {e}")
         raise HTTPException(
@@ -213,14 +214,14 @@ async def create_transaction_record(
     summary="List user's transactions",
     description="""
     Retrieve all transactions belonging to the authenticated user.
-    
+
     This endpoint:
     - Returns paginated list of transactions
     - Only shows transactions owned by the authenticated user (RLS enforced)
     - Supports filtering by account, category, flow type, and date range
     - Supports sorting by date or amount
     - Orders by date descending (newest first) by default
-    
+
     Security:
     - Requires valid authentication token
     - RLS ensures users only see their own transactions
@@ -240,7 +241,7 @@ async def list_transactions(
 ) -> TransactionListResponse:
     """
     List all transactions for the authenticated user.
-    
+
     Args:
         auth_user: Authenticated user from token
         limit: Maximum number of transactions to return (default 50, max 100)
@@ -252,7 +253,7 @@ async def list_transactions(
         to_date: Optional filter by end date
         sort_by: Field to sort by (date or amount, default date)
         sort_order: Sort order (asc or desc, default desc)
-    
+
     Returns:
         TransactionListResponse with list of transactions and pagination metadata
     """
@@ -261,10 +262,10 @@ async def list_transactions(
         f"(limit={limit}, offset={offset}, sort_by={sort_by}, sort_order={sort_order}, "
         f"filters: account={account_id}, category={category_id}, flow_type={flow_type})"
     )
-    
+
     # Create authenticated Supabase client
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         # Fetch transactions from database (RLS enforced)
         transactions = await get_user_transactions(
@@ -280,7 +281,7 @@ async def list_transactions(
             sort_by=sort_by,
             sort_order=sort_order,
         )
-        
+
         # Map to response models (validate & coerce required fields)
         transaction_responses = []
         for txn in transactions:
@@ -301,16 +302,16 @@ async def list_transactions(
                     updated_at=txn.get("updated_at"),
                 )
             )
-        
+
         logger.info(f"Returning {len(transaction_responses)} transactions for user {auth_user.user_id}")
-        
+
         return TransactionListResponse(
             transactions=transaction_responses,
             count=len(transaction_responses),
             limit=limit,
             offset=offset
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to fetch transactions: {e}", exc_info=True)
         raise HTTPException(
@@ -329,12 +330,12 @@ async def list_transactions(
     summary="Get transaction details",
     description="""
     Retrieve a single transaction by its ID.
-    
+
     This endpoint:
     - Returns detailed transaction information
     - Only returns transaction if it belongs to the authenticated user (RLS enforced)
     - Returns 404 if transaction doesn't exist or belongs to another user
-    
+
     Security:
     - Requires valid authentication token
     - RLS ensures users can only access their own transactions
@@ -346,22 +347,22 @@ async def get_transaction(
 ) -> TransactionDetailResponse:
     """
     Get details of a single transaction.
-    
+
     Args:
         transaction_id: UUID of the transaction to retrieve
         auth_user: Authenticated user from token
-    
+
     Returns:
         TransactionDetailResponse with transaction details
-    
+
     Raises:
         HTTPException 404: If transaction not found or not accessible by user
     """
     logger.info(f"Fetching transaction {transaction_id} for user {auth_user.user_id}")
-    
+
     # Create authenticated Supabase client
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         # Fetch transaction from database (RLS enforced)
         transaction = await get_transaction_by_id(
@@ -369,7 +370,7 @@ async def get_transaction(
             user_id=auth_user.user_id,
             transaction_id=transaction_id
         )
-        
+
         if not transaction:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -378,9 +379,9 @@ async def get_transaction(
                     "details": f"Transaction {transaction_id} not found or not accessible"
                 }
             )
-        
+
         logger.info(f"Returning transaction {transaction_id} for user {auth_user.user_id}")
-        
+
         return TransactionDetailResponse(
             id=str(transaction.get("id")),
             user_id=str(transaction.get("user_id")),
@@ -396,7 +397,7 @@ async def get_transaction(
             created_at=_coerce_str(transaction, "created_at"),
             updated_at=transaction.get("updated_at"),
         )
-        
+
     except HTTPException:
         # Re-raise HTTP exceptions (like 404)
         raise
@@ -418,12 +419,12 @@ async def get_transaction(
     summary="Update transaction details",
     description="""
     Update an existing transaction's details.
-    
+
     This endpoint:
     - Accepts partial updates (only provided fields are updated)
     - Returns the complete updated transaction details
     - Requires valid Authorization Bearer token
-    
+
     Security:
     - Only the transaction owner can update their transactions
     - Returns 404 if transaction doesn't exist or belongs to another user
@@ -436,40 +437,40 @@ async def update_transaction_details(
 ) -> TransactionUpdateResponse:
     """
     Update a transaction record.
-    
+
     **6-STEP ENDPOINT FLOW:**
-    
+
     Step 1: Auth
     - Handled by get_authenticated_user dependency
     - Extracts user_id and access_token from Supabase Auth token
-    
+
     Step 2: Parse/Validate Request
     - FastAPI validates TransactionUpdateRequest automatically
     - At least one field must be provided for a valid update
-    
+
     Step 3: Domain & Intent Filter
     - Validate that this is a valid transaction update request
     - Check that transaction exists and belongs to authenticated user
-    
+
     Step 4: Call Service
     - Call update_transaction() service function
     - Service handles RLS enforcement
-    
+
     Step 5: Map Output -> ResponseModel
     - Convert updated transaction to TransactionDetailResponse
     - Return TransactionUpdateResponse with updated transaction
-    
+
     Step 6: Persistence
     - Service layer handles persistence via authenticated Supabase client
     """
-    
+
     logger.info(
         f"Updating transaction {transaction_id} for user {auth_user.user_id}"
     )
-    
+
     # Create authenticated Supabase client
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         # First, check if this is a transfer transaction
         transaction_check = (
@@ -479,7 +480,7 @@ async def update_transaction_details(
             .eq("user_id", auth_user.user_id)
             .execute()
         )
-        
+
         if not transaction_check.data or len(transaction_check.data) == 0:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -488,10 +489,10 @@ async def update_transaction_details(
                     "details": f"Transaction {transaction_id} not found or not accessible"
                 }
             )
-        
+
         # Type assertion: we know this is a dict from Supabase
         transaction: dict = transaction_check.data[0]  # type: ignore
-        
+
         # If this is a transfer (has paired_transaction_id), reject the update
         paired_id = transaction.get("paired_transaction_id")
         if paired_id is not None:
@@ -503,7 +504,7 @@ async def update_transaction_details(
                 .eq("id", category_id)
                 .execute()
             )
-            
+
             if category_check.data and len(category_check.data) > 0:
                 category_row: dict = category_check.data[0]  # type: ignore
                 category_key = category_row.get("key")
@@ -518,7 +519,7 @@ async def update_transaction_details(
                             "details": "This transaction is part of an internal transfer. Use PATCH /transfers/{id} to edit it."
                         }
                     )
-        
+
         # Update transaction (service handles RLS enforcement)
         updated_transaction = await update_transaction(
             supabase_client=supabase_client,
@@ -531,7 +532,7 @@ async def update_transaction_details(
             date=request.date,
             description=request.description,
         )
-        
+
         if not updated_transaction:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -540,7 +541,7 @@ async def update_transaction_details(
                     "details": f"Transaction {transaction_id} not found or not accessible"
                 }
             )
-        
+
         # Map to response model
         transaction_detail = TransactionDetailResponse(
             id=str(updated_transaction.get("id")),
@@ -557,16 +558,16 @@ async def update_transaction_details(
             created_at=_coerce_str(updated_transaction, "created_at"),
             updated_at=updated_transaction.get("updated_at"),
         )
-        
+
         logger.info(f"Transaction {transaction_id} updated successfully for user {auth_user.user_id}")
-        
+
         return TransactionUpdateResponse(
             status="UPDATED",
             transaction_id=str(transaction_id),
             transaction=transaction_detail,
             message="Transaction updated successfully"
         )
-        
+
     except HTTPException:
         # Re-raise HTTP exceptions
         raise
@@ -597,13 +598,13 @@ async def update_transaction_details(
     summary="Delete a transaction",
     description="""
     Delete an existing transaction.
-    
+
     This endpoint:
     - Permanently removes the transaction from the database
     - If part of a paired transfer, clears the pair reference
     - Does NOT delete linked invoices
     - Requires valid Authorization Bearer token
-    
+
     Security:
     - Only the transaction owner can delete their transactions
     - Returns 404 if transaction doesn't exist or belongs to another user
@@ -615,36 +616,36 @@ async def delete_transaction_record(
 ) -> TransactionDeleteResponse:
     """
     Delete a transaction record.
-    
+
     **6-STEP ENDPOINT FLOW:**
-    
+
     Step 1: Auth
     - Handled by get_authenticated_user dependency
     - Extracts user_id and access_token from Supabase Auth token
-    
+
     Step 2: Parse/Validate Request
     - FastAPI validates path parameter transaction_id
-    
+
     Step 3: Domain & Intent Filter
     - Validate that this is a valid transaction delete request
     - Check that transaction exists and belongs to authenticated user
-    
+
     Step 4: Call Service
     - Call delete_transaction() service function
     - Service handles RLS enforcement and paired transaction cleanup
-    
+
     Step 5: Map Output -> ResponseModel
     - Return TransactionDeleteResponse
-    
+
     Step 6: Persistence
     - Service layer handles deletion via authenticated Supabase client
     """
-    
+
     logger.info(f"Deleting transaction {transaction_id} for user {auth_user.user_id}")
-    
+
     # Create authenticated Supabase client
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         # Delete transaction (service handles RLS enforcement and pair cleanup)
         success = await delete_transaction(
@@ -652,7 +653,7 @@ async def delete_transaction_record(
             user_id=auth_user.user_id,
             transaction_id=transaction_id,
         )
-        
+
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -661,15 +662,15 @@ async def delete_transaction_record(
                     "details": f"Transaction {transaction_id} not found or not accessible"
                 }
             )
-        
+
         logger.info(f"Transaction {transaction_id} deleted successfully for user {auth_user.user_id}")
-        
+
         return TransactionDeleteResponse(
             status="DELETED",
             transaction_id=str(transaction_id),
             message="Transaction deleted successfully"
         )
-        
+
     except HTTPException:
         # Re-raise HTTP exceptions
         raise

@@ -15,28 +15,29 @@ Endpoints:
 
 import logging
 from typing import Annotated, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Path
 
-from backend.auth.dependencies import get_authenticated_user, AuthenticatedUser
+from fastapi import APIRouter, Depends, HTTPException, Path, status
+
+from backend.auth.dependencies import AuthenticatedUser, get_authenticated_user
 from backend.db.client import get_supabase_client
-from backend.services.recurring_transaction_service import (
-    get_all_recurring_transactions,
-    get_recurring_transaction_by_id,
-    create_recurring_transaction,
-    update_recurring_transaction,
-    delete_recurring_transaction,
-    sync_recurring_transactions,
-)
 from backend.schemas.recurring_transactions import (
-    RecurringTransactionResponse,
-    RecurringTransactionListResponse,
     RecurringTransactionCreateRequest,
     RecurringTransactionCreateResponse,
+    RecurringTransactionDeleteResponse,
+    RecurringTransactionListResponse,
+    RecurringTransactionResponse,
     RecurringTransactionUpdateRequest,
     RecurringTransactionUpdateResponse,
-    RecurringTransactionDeleteResponse,
     SyncRecurringTransactionsRequest,
     SyncRecurringTransactionsResponse,
+)
+from backend.services.recurring_transaction_service import (
+    create_recurring_transaction,
+    delete_recurring_transaction,
+    get_all_recurring_transactions,
+    get_recurring_transaction_by_id,
+    sync_recurring_transactions,
+    update_recurring_transaction,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,12 +52,12 @@ router = APIRouter(prefix="/recurring-transactions", tags=["recurring-transactio
     summary="List all recurring transaction rules",
     description="""
     Retrieve all recurring transaction rules for the authenticated user.
-    
+
     This endpoint:
     - Returns all user's recurring rules
     - Ordered by creation date (newest first)
     - Only accessible to the rule owner (RLS enforced)
-    
+
     Security:
     - Requires valid Authorization Bearer token
     - RLS ensures users only see their own rules
@@ -67,34 +68,34 @@ async def list_recurring_transactions(
 ) -> RecurringTransactionListResponse:
     """List all recurring transaction rules for the authenticated user."""
     logger.info(f"Listing recurring transactions for user {auth_user.user_id}")
-    
+
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         rules = await get_all_recurring_transactions(
             supabase_client=supabase_client,
             user_id=auth_user.user_id
         )
-        
+
         # Helper to coerce DB values
         def _as_str(v: Any) -> str:
             return str(v) if v is not None else ""
-        
+
         def _as_float(v: Any) -> float:
             try:
                 return float(v) if v is not None else 0.0
             except (ValueError, TypeError):
                 return 0.0
-        
+
         def _as_int(v: Any) -> int:
             try:
                 return int(v) if v is not None else 1
             except (ValueError, TypeError):
                 return 1
-        
+
         def _as_bool(v: Any) -> bool:
             return bool(v) if v is not None else True
-        
+
         rule_responses = [
             RecurringTransactionResponse(
                 id=_as_str(r.get("id")),
@@ -118,14 +119,14 @@ async def list_recurring_transactions(
             )
             for r in rules
         ]
-        
+
         logger.info(f"Returning {len(rule_responses)} recurring rules for user {auth_user.user_id}")
-        
+
         return RecurringTransactionListResponse(
             recurring_transactions=rule_responses,
             count=len(rule_responses)
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to fetch recurring transactions: {e}", exc_info=True)
         raise HTTPException(
@@ -144,12 +145,12 @@ async def list_recurring_transactions(
     summary="Create a new recurring transaction rule",
     description="""
     Create a new recurring transaction rule.
-    
+
     This endpoint:
     - Creates a new rule that will automatically generate transactions
     - Validates frequency-specific constraints (by_weekday, by_monthday)
     - Validates interval >= 1
-    
+
     Security:
     - Requires valid Authorization Bearer token
     - RLS enforces rule is owned by authenticated user
@@ -161,7 +162,7 @@ async def create_new_recurring_transaction(
 ) -> RecurringTransactionCreateResponse:
     """Create a new recurring transaction rule."""
     logger.info(f"Creating recurring transaction for user {auth_user.user_id}: {request.description}")
-    
+
     # Validate frequency-specific constraints
     if request.frequency == "weekly":
         if not request.by_weekday or len(request.by_weekday) == 0:
@@ -172,7 +173,7 @@ async def create_new_recurring_transaction(
                     "details": "by_weekday is required and must not be empty for weekly frequency"
                 }
             )
-    
+
     if request.frequency == "monthly":
         if not request.by_monthday or len(request.by_monthday) == 0:
             raise HTTPException(
@@ -182,9 +183,9 @@ async def create_new_recurring_transaction(
                     "details": "by_monthday is required and must not be empty for monthly frequency"
                 }
             )
-    
+
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         created_rule = await create_recurring_transaction(
             supabase_client=supabase_client,
@@ -203,26 +204,26 @@ async def create_new_recurring_transaction(
             end_date=request.end_date,
             is_active=request.is_active
         )
-        
+
         # Helper to coerce DB values
         def _as_str(v: Any) -> str:
             return str(v) if v is not None else ""
-        
+
         def _as_float(v: Any) -> float:
             try:
                 return float(v) if v is not None else 0.0
             except (ValueError, TypeError):
                 return 0.0
-        
+
         def _as_int(v: Any) -> int:
             try:
                 return int(v) if v is not None else 1
             except (ValueError, TypeError):
                 return 1
-        
+
         def _as_bool(v: Any) -> bool:
             return bool(v) if v is not None else True
-        
+
         rule_response = RecurringTransactionResponse(
             id=_as_str(created_rule.get("id")),
             user_id=_as_str(created_rule.get("user_id")),
@@ -243,15 +244,15 @@ async def create_new_recurring_transaction(
             created_at=_as_str(created_rule.get("created_at")),
             updated_at=_as_str(created_rule.get("updated_at"))
         )
-        
+
         logger.info(f"Recurring transaction created successfully: {rule_response.id}")
-        
+
         return RecurringTransactionCreateResponse(
             status="CREATED",
             recurring_transaction=rule_response,
             message="Recurring transaction rule created successfully"
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -272,11 +273,11 @@ async def create_new_recurring_transaction(
     summary="Get recurring transaction rule details",
     description="""
     Retrieve details of a single recurring transaction rule by ID.
-    
+
     This endpoint:
     - Returns rule details for the specified ID
     - Only accessible to the rule owner (RLS enforced)
-    
+
     Security:
     - Requires valid Authorization Bearer token
     - Returns 404 if rule doesn't exist or belongs to another user
@@ -288,16 +289,16 @@ async def get_recurring_transaction(
 ) -> RecurringTransactionResponse:
     """Get recurring transaction rule by ID."""
     logger.info(f"Fetching recurring transaction {recurring_transaction_id} for user {auth_user.user_id}")
-    
+
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         rule = await get_recurring_transaction_by_id(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
             recurring_transaction_id=recurring_transaction_id
         )
-        
+
         if not rule:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -306,26 +307,26 @@ async def get_recurring_transaction(
                     "details": "Recurring transaction not found"
                 }
             )
-        
+
         # Helper to coerce DB values
         def _as_str(v: Any) -> str:
             return str(v) if v is not None else ""
-        
+
         def _as_float(v: Any) -> float:
             try:
                 return float(v) if v is not None else 0.0
             except (ValueError, TypeError):
                 return 0.0
-        
+
         def _as_int(v: Any) -> int:
             try:
                 return int(v) if v is not None else 1
             except (ValueError, TypeError):
                 return 1
-        
+
         def _as_bool(v: Any) -> bool:
             return bool(v) if v is not None else True
-        
+
         return RecurringTransactionResponse(
             id=_as_str(rule.get("id")),
             user_id=_as_str(rule.get("user_id")),
@@ -346,7 +347,7 @@ async def get_recurring_transaction(
             created_at=_as_str(rule.get("created_at")),
             updated_at=_as_str(rule.get("updated_at"))
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -367,13 +368,13 @@ async def get_recurring_transaction(
     summary="Update recurring transaction rule",
     description="""
     Update recurring transaction rule details.
-    
+
     This endpoint:
     - Accepts partial updates (only provided fields are updated)
     - Returns the complete updated rule
     - Special handling for start_date changes (apply_retroactive_change flag)
     - Special handling for is_active false → true transitions
-    
+
     Security:
     - Only the rule owner can update their rule
     - RLS enforces user_id = auth.uid()
@@ -386,10 +387,10 @@ async def update_existing_recurring_transaction(
 ) -> RecurringTransactionUpdateResponse:
     """Update recurring transaction rule details."""
     logger.info(f"Updating recurring transaction {recurring_transaction_id} for user {auth_user.user_id}")
-    
+
     # Extract non-None updates (exclude apply_retroactive_change as it's not a DB field)
     updates = request.model_dump(exclude_none=True, exclude={"apply_retroactive_change"})
-    
+
     if not updates:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -398,9 +399,9 @@ async def update_existing_recurring_transaction(
                 "details": "At least one field must be provided for update"
             }
         )
-    
+
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         updated_rule, retroactive_deletes = await update_recurring_transaction(
             supabase_client=supabase_client,
@@ -409,7 +410,7 @@ async def update_existing_recurring_transaction(
             apply_retroactive_change=request.apply_retroactive_change,
             **updates
         )
-        
+
         if not updated_rule:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -418,26 +419,26 @@ async def update_existing_recurring_transaction(
                     "details": "Recurring transaction not found"
                 }
             )
-        
+
         # Helper to coerce DB values
         def _as_str(v: Any) -> str:
             return str(v) if v is not None else ""
-        
+
         def _as_float(v: Any) -> float:
             try:
                 return float(v) if v is not None else 0.0
             except (ValueError, TypeError):
                 return 0.0
-        
+
         def _as_int(v: Any) -> int:
             try:
                 return int(v) if v is not None else 1
             except (ValueError, TypeError):
                 return 1
-        
+
         def _as_bool(v: Any) -> bool:
             return bool(v) if v is not None else True
-        
+
         rule_response = RecurringTransactionResponse(
             id=_as_str(updated_rule.get("id")),
             user_id=_as_str(updated_rule.get("user_id")),
@@ -458,16 +459,16 @@ async def update_existing_recurring_transaction(
             created_at=_as_str(updated_rule.get("created_at")),
             updated_at=_as_str(updated_rule.get("updated_at"))
         )
-        
+
         logger.info(f"Recurring transaction {recurring_transaction_id} updated successfully")
-        
+
         return RecurringTransactionUpdateResponse(
             status="UPDATED",
             recurring_transaction=rule_response,
             retroactive_deletes=retroactive_deletes,
             message="Recurring transaction rule updated successfully"
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -488,16 +489,16 @@ async def update_existing_recurring_transaction(
     summary="Delete recurring transaction rule",
     description="""
     Delete a recurring transaction rule following DB deletion rules.
-    
+
     This endpoint:
     - Deletes the recurring rule
     - If rule has a paired_recurring_transaction_id, deletes that rule too
     - Does NOT delete past generated transactions (they remain as history)
-    
+
     Security:
     - Requires valid Authorization Bearer token
     - Only the rule owner can delete their rule
-    
+
     DB Rules:
     1. Record can be deleted without touching past transactions
     2. If paired rule exists, it must be deleted together
@@ -510,16 +511,16 @@ async def delete_existing_recurring_transaction(
 ) -> RecurringTransactionDeleteResponse:
     """Delete recurring transaction rule following DB delete rules."""
     logger.info(f"Deleting recurring transaction {recurring_transaction_id} for user {auth_user.user_id}")
-    
+
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         success, paired_rule_deleted = await delete_recurring_transaction(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
             recurring_transaction_id=recurring_transaction_id
         )
-        
+
         if not success:
             logger.warning(f"Recurring transaction {recurring_transaction_id} not found or not accessible")
             raise HTTPException(
@@ -529,23 +530,23 @@ async def delete_existing_recurring_transaction(
                     "details": f"Recurring transaction {recurring_transaction_id} not found or not accessible"
                 }
             )
-        
+
         message = "Recurring transaction rule deleted successfully."
         if paired_rule_deleted:
             message += " Paired rule was also deleted."
-        
+
         logger.info(
             f"Recurring transaction {recurring_transaction_id} deleted successfully. "
             f"Paired rule deleted: {paired_rule_deleted}"
         )
-        
+
         return RecurringTransactionDeleteResponse(
             status="DELETED",
             recurring_transaction_id=str(recurring_transaction_id),
             paired_rule_deleted=paired_rule_deleted,
             message=message
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -570,26 +571,26 @@ sync_router = APIRouter(prefix="/transactions", tags=["transactions", "recurring
     summary="Synchronize recurring transactions",
     description="""
     Synchronize and generate pending transactions from recurring rules.
-    
+
     This endpoint is designed to be called ONCE from the splash screen on app launch.
     It handles everything atomically in a single database transaction:
-    
+
     **What it does:**
     - Generates all pending transactions up to today
     - Links paired recurring transfers via paired_transaction_id
     - Updates account cached_balance for all affected accounts
     - Updates budget cached_consumption for outcome transactions only
-    
+
     **Efficiency:**
     - Single API call replaces multiple separate calls
     - Batch updates: one recompute per affected account/budget
     - Transfers don't affect budget consumption (correct behavior)
-    
+
     **Best Practice:**
     - Call from splash screen on app launch
     - Throttle to max 1 call per 5 minutes
     - Force sync on pull-to-refresh or after 24h background
-    
+
     Security:
     - Requires valid Authorization Bearer token
     - Only generates transactions for the authenticated user
@@ -601,21 +602,21 @@ async def sync_recurring_transactions_endpoint(
 ) -> SyncRecurringTransactionsResponse:
     """Synchronize recurring transactions."""
     logger.info(f"Syncing recurring transactions for user {auth_user.user_id}")
-    
+
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         transactions_generated, rules_processed, accounts_updated, budgets_updated = await sync_recurring_transactions(
             supabase_client=supabase_client,
             user_id=auth_user.user_id
         )
-        
+
         logger.info(
             f"Sync complete for user {auth_user.user_id}: "
             f"{transactions_generated} transactions from {rules_processed} rules, "
             f"{accounts_updated} accounts, {budgets_updated} budgets updated"
         )
-        
+
         return SyncRecurringTransactionsResponse(
             status="SYNCED",
             transactions_generated=transactions_generated,
@@ -624,7 +625,7 @@ async def sync_recurring_transactions_endpoint(
             budgets_updated=budgets_updated,
             message=f"Generated {transactions_generated} transactions from {rules_processed} recurring rules. Updated {accounts_updated} accounts and {budgets_updated} budgets."
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to sync recurring transactions: {e}", exc_info=True)
         raise HTTPException(

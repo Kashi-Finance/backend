@@ -8,30 +8,31 @@ manual save, recommendations without selection, and recommendations with selecti
 
 import logging
 from typing import Annotated, Any, List
-from fastapi import APIRouter, Depends, HTTPException, status, Path, Query
 
-from backend.auth.dependencies import get_authenticated_user, AuthenticatedUser
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+
+from backend.auth.dependencies import AuthenticatedUser, get_authenticated_user
 from backend.db.client import get_supabase_client
+from backend.schemas.wishlists import (
+    WishlistCreateRequest,
+    WishlistCreateResponse,
+    WishlistDeleteResponse,
+    WishlistItemDeleteResponse,
+    WishlistItemResponse,
+    WishlistListResponse,
+    WishlistResponse,
+    WishlistUpdateRequest,
+    WishlistUpdateResponse,
+    WishlistWithItemsResponse,
+)
 from backend.services.wishlist_service import (
+    create_wishlist,
+    delete_wishlist,
+    delete_wishlist_item,
     get_user_wishlists,
     get_wishlist_by_id,
     get_wishlist_items,
-    create_wishlist,
     update_wishlist,
-    delete_wishlist,
-    delete_wishlist_item,
-)
-from backend.schemas.wishlists import (
-    WishlistResponse,
-    WishlistCreateRequest,
-    WishlistCreateResponse,
-    WishlistUpdateRequest,
-    WishlistUpdateResponse,
-    WishlistDeleteResponse,
-    WishlistListResponse,
-    WishlistWithItemsResponse,
-    WishlistItemResponse,
-    WishlistItemDeleteResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,13 +52,13 @@ def _as_str(v: Any) -> str:
     summary="List user wishlists",
     description="""
     Retrieve all wishlists (purchase goals) belonging to the authenticated user.
-    
+
     This endpoint:
     - Returns all user's wishlist goals
     - Ordered by creation date (newest first)
     - Only accessible to the wishlist owner (RLS enforced)
     - Supports pagination via limit/offset
-    
+
     Security:
     - Requires valid Authorization Bearer token
     - RLS ensures users only see their own wishlists
@@ -70,9 +71,9 @@ async def list_wishlists(
 ) -> WishlistListResponse:
     """List all wishlists for the authenticated user."""
     logger.info(f"Listing wishlists for user {auth_user.user_id} (limit={limit}, offset={offset})")
-    
+
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         wishlists = await get_user_wishlists(
             supabase_client=supabase_client,
@@ -80,7 +81,7 @@ async def list_wishlists(
             limit=limit,
             offset=offset
         )
-        
+
         wishlist_responses = [
             WishlistResponse(
                 id=_as_str(w.get("id")),
@@ -97,16 +98,16 @@ async def list_wishlists(
             )
             for w in wishlists
         ]
-        
+
         logger.info(f"Returning {len(wishlist_responses)} wishlists for user {auth_user.user_id}")
-        
+
         return WishlistListResponse(
             wishlists=wishlist_responses,
             count=len(wishlist_responses),
             limit=limit,
             offset=offset
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to list wishlists for user {auth_user.user_id}: {e}", exc_info=True)
         raise HTTPException(
@@ -125,26 +126,26 @@ async def list_wishlists(
     summary="Create wishlist",
     description="""
     Create a new wishlist (purchase goal) with optional selected items.
-    
+
     This endpoint supports three frontend scenarios:
-    
+
     **CASE A - Manual save (no recommendations)**
     - User fills wizard and clicks "Save my goal" without requesting recommendations
     - selected_items is omitted or empty
     - Only wishlist is created (no items)
-    
+
     **CASE B - Recommendations requested but none selected**
     - User requests recommendations, reviews options, but doesn't select any
     - selected_items is omitted or empty
     - Only wishlist is created (no items)
-    
+
     **CASE C - Recommendations requested and 1-3 selected**
     - User requests recommendations, reviews options, and selects 1-3 offers
     - selected_items contains the selected offers
     - Wishlist is created AND wishlist_item rows are inserted
-    
+
     All operations are atomic - either everything succeeds or everything rolls back.
-    
+
     Security:
     - Requires valid Authorization Bearer token
     - RLS ensures wishlist is owned by authenticated user
@@ -157,27 +158,27 @@ async def create_new_wishlist(
 ) -> WishlistCreateResponse:
     """
     Create a new wishlist (goal) with optional items.
-    
+
     **6-STEP ENDPOINT FLOW:**
-    
+
     Step 1: Auth
     - Handled by get_authenticated_user dependency
-    
+
     Step 2: Parse/Validate Request
     - FastAPI validates WishlistCreateRequest automatically
     - Validates selected_items (max 3) if provided
-    
+
     Step 3: Domain & Intent Filter
     - No ADK agent involved (pure CRUD)
     - Validate budget_hint > 0 (enforced by Pydantic)
-    
+
     Step 4: Call Service
     - Call create_wishlist() service function
     - Service handles atomic wishlist + items creation
-    
+
     Step 5: Map Output -> ResponseModel
     - Convert created wishlist to WishlistCreateResponse
-    
+
     Step 6: Persistence
     - Service layer handles atomic database inserts
     - Wishlist first, then items (if any)
@@ -187,15 +188,15 @@ async def create_new_wishlist(
         f"Creating wishlist for user {auth_user.user_id}: "
         f"goal='{request.goal_title}', items={len(request.selected_items) if request.selected_items else 0}"
     )
-    
+
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         # Convert Pydantic models to dicts for service layer
         selected_items_dicts = None
         if request.selected_items and len(request.selected_items) > 0:
             selected_items_dicts = [item.model_dump() for item in request.selected_items]
-        
+
         # Create wishlist (and items if provided)
         created_wishlist, items_created = await create_wishlist(
             supabase_client=supabase_client,
@@ -208,7 +209,7 @@ async def create_new_wishlist(
             user_note=request.user_note,
             selected_items=selected_items_dicts
         )
-        
+
         wishlist_response = WishlistResponse(
             id=_as_str(created_wishlist.get("id")),
             user_id=_as_str(created_wishlist.get("user_id")),
@@ -222,7 +223,7 @@ async def create_new_wishlist(
             created_at=_as_str(created_wishlist.get("created_at")),
             updated_at=_as_str(created_wishlist.get("updated_at")),
         )
-        
+
         # Generate appropriate message based on items created
         if items_created == 0:
             message = "Wishlist created successfully (no offers selected)"
@@ -230,16 +231,16 @@ async def create_new_wishlist(
             message = "Wishlist created successfully with 1 saved offer"
         else:
             message = f"Wishlist created successfully with {items_created} saved offers"
-        
+
         logger.info(f"Wishlist created successfully: {wishlist_response.id} ({items_created} items)")
-        
+
         return WishlistCreateResponse(
             status="CREATED",
             wishlist=wishlist_response,
             items_created=items_created,
             message=message
         )
-        
+
     except ValueError as e:
         # Currency validation error from service layer
         logger.warning(f"Currency validation failed for wishlist creation: {e}")
@@ -268,12 +269,12 @@ async def create_new_wishlist(
     summary="Get wishlist with items",
     description="""
     Retrieve details of a single wishlist with all its saved items.
-    
+
     This endpoint:
     - Returns wishlist goal details
     - Includes all saved wishlist_item rows (0-N)
     - Only accessible to the wishlist owner (RLS enforced)
-    
+
     Security:
     - Requires valid Authorization Bearer token
     - Returns 404 if wishlist doesn't exist or belongs to another user
@@ -285,9 +286,9 @@ async def get_wishlist(
 ) -> WishlistWithItemsResponse:
     """Get wishlist by ID with all its items."""
     logger.info(f"Fetching wishlist {wishlist_id} for user {auth_user.user_id}")
-    
+
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         # Get wishlist
         wishlist = await get_wishlist_by_id(
@@ -295,7 +296,7 @@ async def get_wishlist(
             user_id=auth_user.user_id,
             wishlist_id=wishlist_id
         )
-        
+
         if not wishlist:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -304,13 +305,13 @@ async def get_wishlist(
                     "details": "Wishlist not found"
                 }
             )
-        
+
         # Get items
         items = await get_wishlist_items(
             supabase_client=supabase_client,
             wishlist_id=wishlist_id
         )
-        
+
         wishlist_response = WishlistResponse(
             id=_as_str(wishlist.get("id")),
             user_id=_as_str(wishlist.get("user_id")),
@@ -324,7 +325,7 @@ async def get_wishlist(
             created_at=_as_str(wishlist.get("created_at")),
             updated_at=_as_str(wishlist.get("updated_at")),
         )
-        
+
         item_responses = [
             WishlistItemResponse(
                 id=_as_str(item.get("id")),
@@ -342,14 +343,14 @@ async def get_wishlist(
             )
             for item in items
         ]
-        
+
         logger.info(f"Returning wishlist {wishlist_id} with {len(item_responses)} items")
-        
+
         return WishlistWithItemsResponse(
             wishlist=wishlist_response,
             items=item_responses
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -370,20 +371,20 @@ async def get_wishlist(
     summary="Get wishlist items",
     description="""
     Retrieve all items saved in a specific wishlist.
-    
+
     This endpoint:
     - Returns all saved store options (0-N items) for the wishlist
     - Ordered by creation date (newest first)
     - Only accessible if the wishlist belongs to the authenticated user (RLS enforced)
     - Returns empty list if wishlist has no items
     - Supports pagination for large item collections
-    
+
     Use Cases:
     - Fetch items separately from wishlist details
     - Refresh items list after adding/removing items
     - Paginate through large item collections
     - Display items in a separate carousel or list view
-    
+
     Security:
     - Requires valid Authorization Bearer token
     - Returns 404 if wishlist doesn't exist or belongs to another user
@@ -401,9 +402,9 @@ async def get_wishlist_items_list(
         f"Fetching items for wishlist {wishlist_id} for user {auth_user.user_id} "
         f"(limit={limit}, offset={offset})"
     )
-    
+
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         # First verify that the wishlist exists and belongs to this user
         wishlist = await get_wishlist_by_id(
@@ -411,7 +412,7 @@ async def get_wishlist_items_list(
             user_id=auth_user.user_id,
             wishlist_id=wishlist_id
         )
-        
+
         if not wishlist:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -420,13 +421,13 @@ async def get_wishlist_items_list(
                     "details": "Wishlist not found"
                 }
             )
-        
+
         # Get items with pagination
         items = await get_wishlist_items(
             supabase_client=supabase_client,
             wishlist_id=wishlist_id
         )
-        
+
         item_responses = [
             WishlistItemResponse(
                 id=_as_str(item.get("id")),
@@ -444,13 +445,13 @@ async def get_wishlist_items_list(
             )
             for item in items
         ]
-        
+
         logger.info(
             f"Returning {len(item_responses)} items for wishlist {wishlist_id}"
         )
-        
+
         return item_responses
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -474,12 +475,12 @@ async def get_wishlist_items_list(
     summary="Update wishlist",
     description="""
     Update wishlist details.
-    
+
     This endpoint:
     - Accepts partial updates (only provided fields are updated)
     - Returns the complete updated wishlist
     - Cannot add/remove items (use separate item endpoints)
-    
+
     Security:
     - Requires valid Authorization Bearer token
     - Only the wishlist owner can update their wishlist
@@ -493,10 +494,10 @@ async def update_existing_wishlist(
 ) -> WishlistUpdateResponse:
     """Update wishlist details."""
     logger.info(f"Updating wishlist {wishlist_id} for user {auth_user.user_id}")
-    
+
     # Extract non-None updates
     updates = request.model_dump(exclude_none=True)
-    
+
     if not updates:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -505,13 +506,13 @@ async def update_existing_wishlist(
                 "details": "At least one field must be provided for update"
             }
         )
-    
+
     # Convert date to string if present
     if "target_date" in updates and updates["target_date"] is not None:
         updates["target_date"] = str(updates["target_date"])
-    
+
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         updated_wishlist = await update_wishlist(
             supabase_client=supabase_client,
@@ -519,7 +520,7 @@ async def update_existing_wishlist(
             wishlist_id=wishlist_id,
             **updates
         )
-        
+
         if not updated_wishlist:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -528,7 +529,7 @@ async def update_existing_wishlist(
                     "details": "Wishlist not found"
                 }
             )
-        
+
         wishlist_response = WishlistResponse(
             id=_as_str(updated_wishlist.get("id")),
             user_id=_as_str(updated_wishlist.get("user_id")),
@@ -542,15 +543,15 @@ async def update_existing_wishlist(
             created_at=_as_str(updated_wishlist.get("created_at")),
             updated_at=_as_str(updated_wishlist.get("updated_at")),
         )
-        
+
         logger.info(f"Wishlist {wishlist_id} updated successfully")
-        
+
         return WishlistUpdateResponse(
             status="UPDATED",
             wishlist=wishlist_response,
             message="Wishlist updated successfully"
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -571,11 +572,11 @@ async def update_existing_wishlist(
     summary="Delete wishlist",
     description="""
     Delete a wishlist and all its items (CASCADE).
-    
+
     Per DB delete rule:
     - All wishlist_item rows are deleted automatically (ON DELETE CASCADE)
     - Then the wishlist is deleted
-    
+
     Security:
     - Requires valid Authorization Bearer token
     - Only the wishlist owner can delete their wishlist
@@ -588,31 +589,31 @@ async def delete_existing_wishlist(
 ) -> WishlistDeleteResponse:
     """Delete wishlist following DB delete rules (CASCADE to items)."""
     logger.info(f"Deleting wishlist {wishlist_id} for user {auth_user.user_id}")
-    
+
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         items_deleted = await delete_wishlist(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
             wishlist_id=wishlist_id
         )
-        
+
         if items_deleted == 0:
             message = "Wishlist deleted successfully (no items)."
         elif items_deleted == 1:
             message = "Wishlist deleted successfully. 1 item removed."
         else:
             message = f"Wishlist deleted successfully. {items_deleted} items removed."
-        
+
         logger.info(f"Wishlist {wishlist_id} deleted successfully ({items_deleted} items)")
-        
+
         return WishlistDeleteResponse(
             status="DELETED",
             message=message,
             items_deleted=items_deleted
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to delete wishlist {wishlist_id}: {e}", exc_info=True)
         raise HTTPException(
@@ -631,12 +632,12 @@ async def delete_existing_wishlist(
     summary="Delete wishlist item",
     description="""
     Delete a single wishlist item.
-    
+
     Per DB delete rule:
     - Item is deleted
     - Parent wishlist remains unaffected
     - Wishlist can have zero items after deletion
-    
+
     Security:
     - Requires valid Authorization Bearer token
     - Verifies wishlist ownership before allowing item deletion
@@ -650,9 +651,9 @@ async def delete_existing_wishlist_item(
 ) -> WishlistItemDeleteResponse:
     """Delete a single wishlist item."""
     logger.info(f"Deleting item {item_id} from wishlist {wishlist_id} for user {auth_user.user_id}")
-    
+
     supabase_client = get_supabase_client(auth_user.access_token)
-    
+
     try:
         deleted = await delete_wishlist_item(
             supabase_client=supabase_client,
@@ -660,7 +661,7 @@ async def delete_existing_wishlist_item(
             wishlist_id=wishlist_id,
             item_id=item_id
         )
-        
+
         if not deleted:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -669,14 +670,14 @@ async def delete_existing_wishlist_item(
                     "details": "Wishlist item not found"
                 }
             )
-        
+
         logger.info(f"Item {item_id} deleted successfully from wishlist {wishlist_id}")
-        
+
         return WishlistItemDeleteResponse(
             status="DELETED",
             message="Wishlist item deleted successfully"
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
