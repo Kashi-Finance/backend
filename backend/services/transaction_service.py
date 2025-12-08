@@ -10,7 +10,7 @@ CRITICAL RULES:
 """
 
 import logging
-from typing import Dict, Any, Optional, List, cast
+from typing import Any, Dict, List, Optional, cast
 
 from supabase import Client
 
@@ -24,16 +24,16 @@ async def _recompute_budgets_for_category(
 ) -> None:
     """
     Recompute cached_consumption for all budgets tracking the given category.
-    
+
     This should be called after creating, updating, or deleting a transaction
     to keep budget data in sync. The RPC finds all active budgets that track
     this category and recalculates their consumption atomically.
-    
+
     Args:
         supabase_client: Authenticated Supabase client
         user_id: The authenticated user's ID
         category_id: The category affected by the transaction
-    
+
     Note:
         This is a non-blocking operation - failures are logged but don't
         raise exceptions to avoid failing the main transaction operation.
@@ -46,7 +46,7 @@ async def _recompute_budgets_for_category(
                 'p_category_id': category_id
             }
         ).execute()
-        
+
         # Log which budgets were updated (RPC returns table, data is a list)
         if result.data and isinstance(result.data, list):
             for budget_update in result.data:
@@ -231,7 +231,7 @@ async def get_user_transactions(
     if sort_by not in allowed_sort_fields:
         logger.warning(f"Invalid sort_by '{sort_by}', defaulting to 'date'")
         sort_by = "date"
-    
+
     # Validate sort_order
     if sort_order not in ["asc", "desc"]:
         logger.warning(f"Invalid sort_order '{sort_order}', defaulting to 'desc'")
@@ -390,24 +390,24 @@ async def update_transaction(
         account_id is not None or
         flow_type is not None
     )
-    
+
     if should_recompute:
         try:
             from backend.services.account_service import recompute_account_balance
-            
+
             # Recompute balance for current account
             current_account = updated_transaction.get("account_id")
             if current_account:
                 await recompute_account_balance(supabase_client, user_id, current_account)
                 logger.debug(f"Account balance recomputed for account {current_account} after update")
-            
+
             # If account changed, also recompute old account balance
             if account_id is not None and existing.get("account_id") != account_id:
                 old_account = existing.get("account_id")
                 if old_account:
                     await recompute_account_balance(supabase_client, user_id, old_account)
                     logger.debug(f"Account balance recomputed for old account {old_account} after transfer")
-                    
+
         except Exception as e:
             logger.warning(f"Failed to recompute account balance after transaction update: {e}")
             # Don't fail the update, just log the warning
@@ -427,13 +427,13 @@ async def update_transaction(
         flow_type is not None or
         date is not None
     )
-    
+
     if should_recompute_budget:
         # Get the current category to recompute its budgets
         current_category = updated_transaction.get("category_id")
         if current_category:
             await _recompute_budgets_for_category(supabase_client, user_id, current_category)
-        
+
         # If category changed, also recompute the old category's budgets
         if category_id is not None and existing.get("category_id") != category_id:
             old_category = existing.get("category_id")
@@ -522,7 +522,7 @@ async def delete_transaction(
         return False
 
     logger.info(f"Transaction {transaction_id} deleted successfully for user {user_id}")
-    
+
     # Recompute account balance after deletion
     try:
         from backend.services.account_service import recompute_account_balance
@@ -533,10 +533,10 @@ async def delete_transaction(
     except Exception as e:
         logger.warning(f"Failed to recompute account balance after transaction deletion: {e}")
         # Don't fail the deletion, just log the warning
-    
+
     # Recompute budget consumption for affected category
     category_id = existing.get("category_id")
     if category_id:
         await _recompute_budgets_for_category(supabase_client, user_id, category_id)
-    
+
     return True

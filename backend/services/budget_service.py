@@ -12,7 +12,7 @@ CRITICAL RULES:
 """
 
 import logging
-from typing import Dict, Any, Optional, List, cast
+from typing import Any, Dict, List, Optional, cast
 
 from supabase import Client
 
@@ -27,18 +27,18 @@ async def get_all_budgets(
 ) -> List[Dict[str, Any]]:
     """
     Fetch all budgets for the user with their linked categories.
-    
+
     Uses Supabase JOIN to fetch budget_category relationships and category details.
-    
+
     Args:
         supabase_client: Authenticated Supabase client
         user_id: The authenticated user's ID
         frequency: Optional filter by budget frequency (daily/weekly/monthly/yearly/once)
         is_active: Optional filter by active status
-    
+
     Returns:
         List of budget records with embedded categories
-    
+
     Security:
         - RLS enforces user_id = auth.uid()
         - User can only access their own budgets
@@ -47,7 +47,7 @@ async def get_all_budgets(
         f"Fetching budgets with categories for user {user_id} "
         f"(filters: frequency={frequency}, is_active={is_active})"
     )
-    
+
     # Use Supabase foreign key syntax to join budget_category and category
     # Select full category records so the API can return every category field
     query = (
@@ -60,22 +60,22 @@ async def get_all_budgets(
         """)
         .eq("user_id", user_id)
     )
-    
+
     # Apply filters
     if frequency:
         query = query.eq("frequency", frequency)
     if is_active is not None:
         query = query.eq("is_active", is_active)
-    
+
     result = query.order("created_at", desc=True).execute()
-    
+
     budgets_raw = cast(List[Dict[str, Any]], result.data or [])
-    
+
     # Transform nested structure to flat categories list
     budgets = []
     for budget_raw in budgets_raw:
         budget = {k: v for k, v in budget_raw.items() if k != "budget_category"}
-        
+
         # Extract categories from budget_category junction
         categories = []
         if "budget_category" in budget_raw and budget_raw["budget_category"]:
@@ -89,12 +89,12 @@ async def get_all_budgets(
                     if "id" in full_cat:
                         full_cat["id"] = str(full_cat["id"])
                     categories.append(full_cat)
-        
+
         budget["categories"] = categories
         budgets.append(budget)
-    
+
     logger.info(f"Fetched {len(budgets)} budgets with categories for user {user_id}")
-    
+
     return budgets
 
 
@@ -105,23 +105,23 @@ async def get_budget_by_id(
 ) -> Optional[Dict[str, Any]]:
     """
     Fetch a single budget by its ID with linked categories.
-    
+
     Uses Supabase JOIN to fetch budget_category relationships and category details.
-    
+
     Args:
         supabase_client: Authenticated Supabase client
         user_id: The authenticated user's ID
         budget_id: UUID of the budget to fetch
-    
+
     Returns:
         Budget record with embedded categories if found and accessible, None otherwise
-    
+
     Security:
         - User can only access their own budgets
         - RLS enforces user_id = auth.uid()
     """
     logger.debug(f"Fetching budget {budget_id} with categories for user {user_id}")
-    
+
     # Select full category records so the API can return every category field
     result = (
         supabase_client.table("budget")
@@ -135,16 +135,16 @@ async def get_budget_by_id(
         .eq("user_id", user_id)
         .execute()
     )
-    
+
     if not result.data or len(result.data) == 0:
         logger.warning(f"Budget {budget_id} not found or not accessible by user {user_id}")
         return None
-    
+
     budget_raw = cast(Dict[str, Any], result.data[0])
-    
+
     # Transform nested structure to flat categories list
     budget = {k: v for k, v in budget_raw.items() if k != "budget_category"}
-    
+
     # Extract categories from budget_category junction
     categories = []
     if "budget_category" in budget_raw and budget_raw["budget_category"]:
@@ -157,11 +157,11 @@ async def get_budget_by_id(
                 if "id" in full_cat:
                     full_cat["id"] = str(full_cat["id"])
                 categories.append(full_cat)
-    
+
     budget["categories"] = categories
-    
+
     logger.info(f"Fetched budget {budget_id} with {len(categories)} categories for user {user_id}")
-    
+
     return budget
 
 
@@ -179,9 +179,9 @@ async def create_budget(
 ) -> tuple[Dict[str, Any], int]:
     """
     Create a new budget and link categories.
-    
+
     The budget currency is automatically set to the user's profile.currency_preference.
-    
+
     Args:
         supabase_client: Authenticated Supabase client
         user_id: The authenticated user's ID
@@ -193,13 +193,13 @@ async def create_budget(
         end_date: When budget ends (optional)
         is_active: Whether budget is active
         category_ids: List of category UUIDs to link
-    
+
     Returns:
         Tuple of (created budget, number of categories linked)
-    
+
     Raises:
         Exception: If the database operation fails or user profile not found
-    
+
     Security:
         - RLS enforces that user_id = auth.uid()
         - User can only create budgets for themselves
@@ -210,12 +210,12 @@ async def create_budget(
         'get_user_currency',
         {'p_user_id': user_id}
     ).execute()
-    
+
     if not currency_result.data:
         raise Exception("Failed to get user currency: profile not found")
-    
+
     user_currency = currency_result.data
-    
+
     budget_data = {
         "user_id": user_id,
         "name": name,
@@ -227,19 +227,19 @@ async def create_budget(
         "end_date": end_date,
         "is_active": is_active
     }
-    
+
     logger.info(f"Creating budget for user {user_id}: limit={limit_amount} {user_currency}, frequency={frequency}")
-    
+
     result = supabase_client.table("budget").insert(budget_data).execute()
-    
+
     if not result.data or len(result.data) == 0:
         raise Exception("Failed to create budget: no data returned")
-    
+
     created_budget = cast(Dict[str, Any], result.data[0])
     budget_id = str(created_budget.get("id"))
-    
+
     logger.info(f"Budget created successfully: {budget_id}")
-    
+
     # Link categories via budget_category
     categories_linked = 0
     if category_ids:
@@ -251,17 +251,17 @@ async def create_budget(
             }
             for cat_id in category_ids
         ]
-        
+
         link_result = (
             supabase_client.table("budget_category")
             .insert(budget_category_links)
             .execute()
         )
-        
+
         if link_result.data:
             categories_linked = len(link_result.data)
             logger.info(f"Linked {categories_linked} categories to budget {budget_id}")
-    
+
     # Re-fetch budget with categories to include in response
     budget_with_categories = await get_budget_by_id(supabase_client, user_id, budget_id)
     if not budget_with_categories:
@@ -269,7 +269,7 @@ async def create_budget(
         logger.warning(f"Could not re-fetch budget {budget_id} with categories")
         created_budget["categories"] = []
         return created_budget, categories_linked
-    
+
     return budget_with_categories, categories_linked
 
 
@@ -281,23 +281,23 @@ async def update_budget(
 ) -> Optional[Dict[str, Any]]:
     """
     Update a budget.
-    
+
     Args:
         supabase_client: Authenticated Supabase client
         user_id: The authenticated user's ID
         budget_id: UUID of the budget to update
         **updates: Fields to update
-    
+
     Returns:
         Updated budget record if successful, None if not found or not accessible
-    
+
     Raises:
         Exception: If trying to update a budget that doesn't belong to user
-    
+
     Security:
         - User can only update their own budgets
         - RLS enforces user_id = auth.uid()
-    
+
     NOTE: This does not update budget_category links. Use separate endpoints
     for adding/removing category links.
     """
@@ -305,9 +305,9 @@ async def update_budget(
     existing = await get_budget_by_id(supabase_client, user_id, budget_id)
     if not existing:
         return None
-    
+
     logger.info(f"Updating budget {budget_id} for user {user_id}: {list(updates.keys())}")
-    
+
     result = (
         supabase_client.table("budget")
         .update(updates)
@@ -315,16 +315,16 @@ async def update_budget(
         .eq("user_id", user_id)
         .execute()
     )
-    
+
     if not result.data or len(result.data) == 0:
         logger.warning(f"Budget {budget_id} not found for user {user_id}")
         return None
-    
+
     logger.info(f"Budget {budget_id} updated successfully")
-    
+
     # Re-fetch budget with categories to include in response
     updated_budget_with_categories = await get_budget_by_id(supabase_client, user_id, budget_id)
-    
+
     return updated_budget_with_categories
 
 
@@ -335,29 +335,29 @@ async def delete_budget(
 ) -> tuple[bool, str | None]:
     """
     Soft-delete a user budget using the delete_budget RPC.
-    
+
     This function:
     1. Calls the delete_budget RPC for atomic soft-delete operation
     2. RPC validates ownership and sets deleted_at timestamp
     3. budget_category junction rows remain (for historical analysis)
-    
+
     Args:
         supabase_client: Authenticated Supabase client
         user_id: The authenticated user's ID
         budget_id: UUID of the budget to soft-delete
-    
+
     Returns:
         Tuple of (success, deleted_at timestamp or None)
-    
+
     Raises:
         Exception: If RPC call fails
-    
+
     Security:
         - RPC validates user_id ownership before soft-deleting
         - User can only delete their own budgets
     """
     logger.info(f"Preparing to soft-delete budget {budget_id} for user {user_id}")
-    
+
     try:
         # Call the delete_budget RPC for atomic soft-delete
         rpc_res = supabase_client.rpc(
@@ -376,14 +376,14 @@ async def delete_budget(
         row = cast(Dict[str, Any], data[0])
         budget_soft_deleted = bool(row.get("budget_soft_deleted", False))
         deleted_at = row.get("deleted_at")
-        
+
         if budget_soft_deleted:
             logger.info(f"Budget {budget_id} soft-deleted successfully via RPC at {deleted_at}")
             return (True, deleted_at)
         else:
             logger.warning(f"Budget {budget_id} soft-delete failed via RPC")
             return (False, None)
-            
+
     except Exception as e:
         logger.error(f"Failed to soft-delete budget via RPC for {budget_id}: {e}", exc_info=True)
         raise

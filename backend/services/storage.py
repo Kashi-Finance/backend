@@ -10,9 +10,8 @@ import mimetypes
 from typing import Optional
 from uuid import uuid4
 
-from supabase import Client
-
 from backend.config import settings
+from supabase import Client
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +211,7 @@ def get_invoice_image_url(
             url = response.signed_url
         else:
             url = str(response)
-        
+
         logger.debug(f"Generated signed URL for storage_path={storage_path}")
         return url
 

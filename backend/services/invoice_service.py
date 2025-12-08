@@ -9,7 +9,7 @@ CRITICAL RULES:
 """
 
 import logging
-from typing import Dict, Any, Optional, cast, List
+from typing import Any, Dict, List, Optional, cast
 
 from supabase import Client
 
@@ -50,7 +50,7 @@ def format_extracted_text(
     """
     # Convert total_amount to string if it's a float
     total_amount_str = str(total_amount) if isinstance(total_amount, (int, float)) else total_amount
-    
+
     return EXTRACTED_INVOICE_TEXT_FORMAT.format(
         store_name=store_name,
         transaction_time=transaction_time,
@@ -101,7 +101,7 @@ async def create_invoice(
     """
     # Convert total_amount to string if it's a float
     total_amount_str = str(total_amount) if isinstance(total_amount, (int, float)) else total_amount
-    
+
     # Format data into canonical template
     extracted_text = format_extracted_text(
         store_name=store_name,
@@ -274,14 +274,14 @@ async def delete_invoice(
         row = cast(Dict[str, Any], data[0])
         invoice_soft_deleted = bool(row.get("invoice_soft_deleted", False))
         deleted_at = row.get("deleted_at")
-        
+
         if invoice_soft_deleted:
             logger.info(f"Invoice {invoice_id} soft-deleted successfully via RPC at {deleted_at}")
             return (True, deleted_at)
         else:
             logger.warning(f"Invoice {invoice_id} soft-delete failed via RPC")
             return (False, None)
-            
+
     except Exception as e:
         logger.error(f"Failed to soft-delete invoice via RPC for {invoice_id}: {e}", exc_info=True)
         raise
