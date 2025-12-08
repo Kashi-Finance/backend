@@ -6,20 +6,21 @@ owned by the same user. They are represented as paired transaction records.
 """
 
 from typing import List, Literal, Optional
+
 from pydantic import BaseModel, Field, field_validator
 
-# Import TransactionDetailResponse for reuse
-from backend.schemas.transactions import TransactionDetailResponse
 # Import RecurringTransactionResponse for reuse
 from backend.schemas.recurring_transactions import RecurringTransactionResponse
 
+# Import TransactionDetailResponse for reuse
+from backend.schemas.transactions import TransactionDetailResponse
 
 # --- Normal Transfer Schemas ---
 
 class TransferCreateRequest(BaseModel):
     """
     Request for creating a one-time internal transfer between accounts.
-    
+
     Creates two paired transactions:
     - One outcome from source account
     - One income to destination account
@@ -32,7 +33,7 @@ class TransferCreateRequest(BaseModel):
         None,
         description="Optional description for both transactions"
     )
-    
+
     @field_validator("description")
     @classmethod
     def validate_description_not_empty_if_provided(cls, v: Optional[str]) -> Optional[str]:
@@ -45,7 +46,7 @@ class TransferCreateRequest(BaseModel):
 class TransferCreateResponse(BaseModel):
     """
     Response after creating a transfer.
-    
+
     Returns the two paired transaction records created (outcome and income).
     Frontend can treat these as regular transactions in their displays.
     """
@@ -60,7 +61,7 @@ class TransferCreateResponse(BaseModel):
 class TransferUpdateRequest(BaseModel):
     """
     Request for updating a transfer.
-    
+
     Updates both paired transactions atomically with the same values.
     Only amount, date, and description can be updated.
     All other fields (category, flow_type, accounts) are immutable.
@@ -68,7 +69,7 @@ class TransferUpdateRequest(BaseModel):
     amount: Optional[float] = Field(None, description="New amount (must be > 0)", gt=0)
     date: Optional[str] = Field(None, description="New date (ISO-8601 format)")
     description: Optional[str] = Field(None, description="New description for both transactions")
-    
+
     @field_validator("description")
     @classmethod
     def validate_description_not_empty_if_provided(cls, v: Optional[str]) -> Optional[str]:
@@ -81,7 +82,7 @@ class TransferUpdateRequest(BaseModel):
 class TransferUpdateResponse(BaseModel):
     """
     Response after updating a transfer.
-    
+
     Returns both updated transaction records to maintain consistency.
     """
     status: Literal["UPDATED"] = "UPDATED"
@@ -110,7 +111,7 @@ RecurringFrequency = Literal["daily", "weekly", "monthly", "yearly"]
 class RecurringTransferCreateRequest(BaseModel):
     """
     Request for creating a recurring internal transfer.
-    
+
     Creates two paired recurring_transaction rules:
     - One outcome template for source account
     - One income template for destination account
@@ -139,40 +140,40 @@ class RecurringTransferCreateRequest(BaseModel):
     start_date: str = Field(..., description="Start date (YYYY-MM-DD)")
     end_date: Optional[str] = Field(None, description="End date (YYYY-MM-DD) or NULL for indefinite")
     is_active: bool = Field(True, description="Active by default")
-    
+
     @field_validator("by_weekday")
     @classmethod
     def validate_weekdays(cls, v: Optional[List[str]]) -> Optional[List[str]]:
         """Validate weekday names for weekly frequency."""
         if v is None:
             return v
-        
+
         valid_weekdays = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
         for day in v:
             if day.lower() not in valid_weekdays:
                 raise ValueError(f"Invalid weekday: {day}. Must be one of {valid_weekdays}")
-        
+
         return [d.lower() for d in v]
-    
+
     @field_validator("by_monthday")
     @classmethod
     def validate_monthdays(cls, v: Optional[List[int]]) -> Optional[List[int]]:
         """Validate month day numbers for monthly frequency."""
         if v is None:
             return v
-        
+
         for day in v:
             if day < 1 or day > 31:
                 raise ValueError(f"Invalid monthday: {day}. Must be between 1 and 31")
-        
+
         return v
 
 
 class RecurringTransferCreateResponse(BaseModel):
     """
     Response after creating a recurring transfer.
-    
-    Returns the two paired recurring_transaction records created 
+
+    Returns the two paired recurring_transaction records created
     (outcome and income rules). Frontend can use the same schema as regular recurring transactions.
     """
     status: Literal["CREATED"] = "CREATED"

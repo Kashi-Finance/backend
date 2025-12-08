@@ -6,15 +6,15 @@ Accounts are financial containers (cash, bank, credit card, etc.) that track bal
 via transaction history.
 """
 
-from typing import Optional, Literal
-from pydantic import BaseModel, Field
 import re
+from typing import Literal, Optional
 
+from pydantic import BaseModel, Field
 
 # Account type enum (matches DB CHECK constraint)
 AccountType = Literal[
     "cash",
-    "bank", 
+    "bank",
     "credit_card",
     "loan",
     "remittance",
@@ -35,7 +35,7 @@ def validate_hex_color(color: str) -> str:
 class AccountResponse(BaseModel):
     """
     Response for account details.
-    
+
     Contains all account fields including cached balance and display customization.
     """
     id: str = Field(..., description="Account UUID")
@@ -49,7 +49,7 @@ class AccountResponse(BaseModel):
     is_pinned: bool = Field(..., description="If true, appears at top of account list")
     description: Optional[str] = Field(None, description="Optional user description")
     cached_balance: float = Field(
-        ..., 
+        ...,
         description="Cached account balance (performance cache, recomputable via recompute_account_balance RPC)"
     )
     created_at: str = Field(..., description="ISO-8601 timestamp when created")
@@ -61,7 +61,7 @@ class AccountResponse(BaseModel):
 class AccountCreateRequest(BaseModel):
     """
     Request to create a new account.
-    
+
     All fields are required except those with defaults.
     """
     name: str = Field(
@@ -139,10 +139,10 @@ class AccountCreateResponse(BaseModel):
 class AccountUpdateRequest(BaseModel):
     """
     Request to update an account.
-    
+
     All fields are optional - only provided fields will be updated.
     At least one field must be provided.
-    
+
     NOTE: Currency cannot be changed after creation (single-currency-per-user policy).
     NOTE: To set is_favorite=true, use the dedicated set_favorite_account RPC.
     """
@@ -198,7 +198,7 @@ class AccountUpdateResponse(BaseModel):
 class AccountDeleteRequest(BaseModel):
     """
     Request to delete an account.
-    
+
     Must specify deletion strategy per DB delete rule.
     """
     strategy: Literal["reassign", "delete_transactions"] = Field(
@@ -261,7 +261,7 @@ class AccountListResponse(BaseModel):
 class SetFavoriteAccountRequest(BaseModel):
     """
     Request to set an account as the user's favorite.
-    
+
     Setting a new favorite automatically clears the previous favorite (if any).
     """
     account_id: str = Field(

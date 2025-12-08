@@ -1,14 +1,14 @@
 """
 Pydantic schemas for recommendation query endpoints.
 
-These models define the strict request/response contracts for the 
-recommendation system powered by Prompt Chaining with DeepSeek V3.2.
+These models define the strict request/response contracts for the
+recommendation system powered by Gemini with Google Search grounding.
 """
 
-from typing import Optional, Literal, List, Dict, Any
 from decimal import Decimal
-from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Literal, Optional
 
+from pydantic import BaseModel, Field
 
 # ============================================================================
 # REQUEST MODELS
@@ -17,11 +17,11 @@ from pydantic import BaseModel, Field
 class RecommendationQueryRequest(BaseModel):
     """
     Request to query recommendations for a purchase goal.
-    
+
     This is the initial request that triggers the recommendation service.
-    The service will validate the request, call DeepSeek API, and return
-    structured product recommendations.
-    
+    The service will validate the request, call Gemini with Google Search,
+    and return structured product recommendations from real web data.
+
     Frontend scenarios:
     - First query: User fills basic info and clicks "Get recommendations"
     - Retry/refine: User adjusts parameters and tries again
@@ -86,12 +86,12 @@ class RecommendationQueryRequest(BaseModel):
 class RecommendationRetryRequest(BaseModel):
     """
     Request to retry recommendations with updated criteria.
-    
+
     Used when:
     - User received NO_VALID_OPTION and wants to adjust criteria
     - User wants to broaden search (higher budget, different store, etc.)
     - User wants different options (agent may return different results)
-    
+
     Same structure as RecommendationQueryRequest but semantically different
     (this is a retry/refinement, not a fresh query).
     """
@@ -130,7 +130,7 @@ class RecommendationRetryRequest(BaseModel):
 class MissingFieldResponse(BaseModel):
     """
     Schema for a missing field that needs user clarification.
-    
+
     Returned when agent determines required information is missing.
     """
     field: str = Field(
@@ -151,7 +151,7 @@ class MissingFieldResponse(BaseModel):
 class ProductRecommendation(BaseModel):
     """
     Schema for a single formatted product recommendation.
-    
+
     This is the final output from the recommendation service, ready for UI display.
     Matches WishlistItemFromRecommendation schema for seamless persistence.
     """
@@ -212,7 +212,7 @@ class ProductRecommendation(BaseModel):
 class RecommendationQueryResponseNeedsClarification(BaseModel):
     """
     Response when agent needs more information to proceed.
-    
+
     Frontend should:
     1. Display missing_fields questions to user
     2. Collect answers
@@ -232,7 +232,7 @@ class RecommendationQueryResponseNeedsClarification(BaseModel):
 class RecommendationQueryResponseOK(BaseModel):
     """
     Response when agent successfully found recommendations.
-    
+
     Frontend should:
     1. Display results_for_user to user
     2. Allow user to select 0-3 options
@@ -253,13 +253,13 @@ class RecommendationQueryResponseOK(BaseModel):
 class RecommendationQueryResponseNoValidOption(BaseModel):
     """
     Response when agent cannot find suitable recommendations.
-    
+
     Reasons:
     - Out-of-scope request (prohibited content, illegal items)
     - No products match criteria within budget
     - All candidates failed validation
     - Agent error or search failure
-    
+
     Frontend should:
     1. Display reason to user
     2. Offer retry with adjusted criteria (higher budget, different query, etc.)

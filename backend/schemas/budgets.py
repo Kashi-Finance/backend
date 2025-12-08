@@ -6,8 +6,8 @@ Categories are linked via budget_category junction table.
 """
 
 from typing import List, Literal, Optional
-from pydantic import BaseModel, Field
 
+from pydantic import BaseModel, Field
 
 # Budget frequency enum (matches DB CHECK constraint)
 BudgetFrequency = Literal["once", "daily", "weekly", "monthly", "yearly"]
@@ -32,7 +32,7 @@ class LinkedCategoryResponse(BaseModel):
 class BudgetResponse(BaseModel):
     """
     Response for budget details.
-    
+
     Contains all budget fields plus linked categories from budget_category table.
     Consumption (spent amount) is computed from transactions at runtime, not stored directly.
     """
@@ -47,7 +47,7 @@ class BudgetResponse(BaseModel):
     end_date: Optional[str] = Field(None, description="Hard stop date for one-time/project budgets (ISO-8601 date)")
     is_active: bool = Field(..., description="Whether the budget is currently in effect")
     cached_consumption: float = Field(
-        ..., 
+        ...,
         description="Cached budget consumption (performance cache, recomputable via recompute_budget_consumption RPC)"
     )
     categories: List[LinkedCategoryResponse] = Field(
@@ -71,7 +71,7 @@ class BudgetListResponse(BaseModel):
 class BudgetCreateRequest(BaseModel):
     """
     Request to create a new budget.
-    
+
     All fields are required except name, end_date and is_active (which have defaults).
     Categories are linked separately via budget_category after creation.
     """
@@ -137,10 +137,10 @@ class BudgetCreateResponse(BaseModel):
 class BudgetUpdateRequest(BaseModel):
     """
     Request to update a budget.
-    
+
     All fields are optional - only provided fields will be updated.
     At least one field must be provided.
-    
+
     NOTE: To update linked categories, use separate endpoints for adding/removing
     budget_category links. This endpoint only updates budget fields.
     """
@@ -190,7 +190,7 @@ class BudgetUpdateResponse(BaseModel):
 class BudgetDeleteResponse(BaseModel):
     """
     Response after successfully soft-deleting a budget.
-    
+
     Note: Soft-delete sets deleted_at timestamp. Junction table rows remain for historical analysis.
     """
     status: Literal["DELETED"] = Field("DELETED", description="Indicates successful soft-deletion")

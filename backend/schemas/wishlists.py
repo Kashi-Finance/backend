@@ -6,11 +6,11 @@ Wishlists represent user purchase goals (what they want to buy), and wishlist_it
 represent specific store options saved from the recommendation flow.
 """
 
-from typing import Optional, Literal, List
-from decimal import Decimal
 from datetime import date
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from decimal import Decimal
+from typing import List, Literal, Optional
 
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 # Wishlist status enum (matches DB CHECK constraint)
 WishlistStatus = Literal["active", "purchased", "abandoned"]
@@ -21,7 +21,7 @@ WishlistStatus = Literal["active", "purchased", "abandoned"]
 class WishlistItemFromRecommendation(BaseModel):
     """
     A specific store option selected from the recommendation flow.
-    
+
     These come from the recommendation service output and are saved when the user
     explicitly selects them at the end of the recommendation wizard.
     """
@@ -112,7 +112,7 @@ class WishlistItemResponse(BaseModel):
 class WishlistCreateRequest(BaseModel):
     """
     Request to create a new wishlist (goal).
-    
+
     Supports three frontend scenarios:
     - CASE A: Manual save (no recommendations) - selected_items omitted/empty
     - CASE B: Recommendations requested but none selected - selected_items omitted/empty
@@ -222,7 +222,7 @@ class WishlistCreateResponse(BaseModel):
 class WishlistUpdateRequest(BaseModel):
     """
     Request to update a wishlist.
-    
+
     All fields are optional - only provided fields will be updated.
     At least one field must be provided.
     """
@@ -316,7 +316,7 @@ class WishlistListResponse(BaseModel):
 class WishlistWithItemsResponse(BaseModel):
     """
     Response for wishlist with its saved items.
-    
+
     Used for GET /wishlists/{wishlist_id} to return complete goal details.
     """
     wishlist: WishlistResponse = Field(..., description="The wishlist goal")

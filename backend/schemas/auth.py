@@ -5,13 +5,14 @@ These models define the strict request/response contracts for auth endpoints.
 """
 
 from typing import Optional
+
 from pydantic import BaseModel, Field
 
 
 class ProfileSummary(BaseModel):
     """
     Condensed profile info for auth/me response.
-    
+
     Contains only the essential profile fields needed for session hydration.
     """
     first_name: str = Field(..., description="User's first name")
@@ -37,7 +38,7 @@ class ProfileSummary(BaseModel):
 class AuthMeResponse(BaseModel):
     """
     Response for GET /auth/me - Authenticated user identity.
-    
+
     Used on app boot to hydrate global session state and confirm token validity.
     """
     user_id: str = Field(..., description="User UUID (from JWT 'sub' claim)")
@@ -49,7 +50,7 @@ class AuthMeResponse(BaseModel):
         None,
         description="User's profile if it exists. Null if profile hasn't been created yet."
     )
-    
+
     model_config = {
         "json_schema_extra": {
             "examples": [

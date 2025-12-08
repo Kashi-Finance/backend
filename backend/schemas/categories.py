@@ -13,9 +13,9 @@ Subcategory Support:
 - Subcategories can be created inline with parent via subcategories array
 """
 
-from typing import Literal, Optional, List
-from pydantic import BaseModel, Field, model_validator
+from typing import List, Literal, Optional
 
+from pydantic import BaseModel, Field, model_validator
 
 # Literal type for flow_type (income or outcome)
 FlowType = Literal["income", "outcome"]
@@ -23,7 +23,7 @@ FlowType = Literal["income", "outcome"]
 
 class SubcategoryCreateInline(BaseModel):
     """
-    Inline subcategory definition for creating subcategories 
+    Inline subcategory definition for creating subcategories
     together with their parent category in a single request.
     """
     name: str = Field(..., min_length=1, max_length=100, description="Subcategory display name")
@@ -45,7 +45,7 @@ class SubcategoryCreateInline(BaseModel):
 class CategoryResponse(BaseModel):
     """
     Response model for a single category.
-    
+
     Fields:
         id: UUID of the category
         user_id: Owner user ID (NULL for system categories)
@@ -70,7 +70,7 @@ class CategoryResponse(BaseModel):
     created_at: str = Field(..., description="Creation timestamp (ISO-8601)")
     updated_at: Optional[str] = Field(None, description="Last update timestamp (ISO-8601)")
     subcategories: Optional[List["CategoryResponse"]] = Field(
-        None, 
+        None,
         description="Child categories (only populated when include_subcategories=true)"
     )
 
@@ -78,7 +78,7 @@ class CategoryResponse(BaseModel):
 class CategoryListResponse(BaseModel):
     """
     Response model for listing categories.
-    
+
     Returns both system categories (user_id=NULL) and user's personal categories.
     Subcategories are nested under their parents when include_subcategories=true.
     """
@@ -91,9 +91,9 @@ class CategoryListResponse(BaseModel):
 class CategoryCreateRequest(BaseModel):
     """
     Request model for creating a new user category.
-    
+
     System categories cannot be created via API.
-    
+
     Subcategory Creation:
     - To create a category under a parent, provide parent_category_id
     - To create a category WITH subcategories, provide subcategories array
@@ -122,7 +122,7 @@ class CategoryCreateRequest(BaseModel):
         None,
         description="Inline subcategories to create with this parent category."
     )
-    
+
     @model_validator(mode='after')
     def validate_subcategory_depth(self):
         """Ensure max depth of 1: can't both be a child AND have children."""
@@ -137,13 +137,13 @@ class CategoryCreateRequest(BaseModel):
 class CategoryCreateResponse(BaseModel):
     """
     Response for successful category creation.
-    
+
     When subcategories were created inline, they appear in category.subcategories.
     """
     status: Literal["CREATED"] = Field(..., description="Status indicator")
     category: CategoryResponse = Field(..., description="Created category with optional subcategories")
     subcategories_created: int = Field(
-        0, 
+        0,
         description="Number of inline subcategories created (0 if none provided)"
     )
     message: str = Field(..., description="Success message")
@@ -152,14 +152,14 @@ class CategoryCreateResponse(BaseModel):
 class CategoryUpdateRequest(BaseModel):
     """
     Request model for updating a user category.
-    
+
     All fields optional (partial update).
     At least one field must be provided.
-    
+
     NOTE: flow_type is NOT editable. Changing flow_type would affect all transactions
     in that category, impacting balances and dependent data structures. Users must
     create a new category with the correct flow_type instead.
-    
+
     NOTE: parent_category_id is NOT editable. Moving subcategories between parents
     is not supported. Delete and recreate if needed.
     """
@@ -187,7 +187,7 @@ class CategoryUpdateResponse(BaseModel):
 class CategoryDeleteResponse(BaseModel):
     """
     Response for successful category deletion.
-    
+
     Includes counts of reassigned transactions and removed budget links.
     When deleting a parent category, its subcategories become top-level (parent_category_id set to NULL).
     """

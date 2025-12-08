@@ -6,8 +6,8 @@ that automatically generate transactions based on schedules.
 """
 
 from typing import List, Literal, Optional
-from pydantic import BaseModel, Field, field_validator
 
+from pydantic import BaseModel, Field, field_validator
 
 # Type aliases matching DB enums
 RecurringFrequency = Literal["daily", "weekly", "monthly", "yearly"]
@@ -17,7 +17,7 @@ FlowType = Literal["income", "outcome"]
 class RecurringTransactionResponse(BaseModel):
     """
     Complete recurring transaction rule representation.
-    
+
     Returned by GET endpoints and after create/update operations.
     """
     id: str = Field(..., description="Recurring transaction UUID")
@@ -28,17 +28,17 @@ class RecurringTransactionResponse(BaseModel):
     amount: float = Field(..., description="Amount to insert each occurrence", gt=0)
     description: str = Field(..., description="Text for transaction description")
     paired_recurring_transaction_id: Optional[str] = Field(
-        None, 
+        None,
         description="UUID of paired recurring rule for internal transfers"
     )
     frequency: RecurringFrequency = Field(..., description="Base recurrence cadence")
     interval: int = Field(..., description="How often it repeats (must be >= 1)", ge=1)
     by_weekday: Optional[List[str]] = Field(
-        None, 
+        None,
         description="Specific weekdays (e.g. ['monday', 'friday']) for weekly frequency"
     )
     by_monthday: Optional[List[int]] = Field(
-        None, 
+        None,
         description="Specific month days (1-31) for monthly frequency"
     )
     start_date: str = Field(..., description="When this rule becomes valid (DATE format)")
@@ -58,7 +58,7 @@ class RecurringTransactionListResponse(BaseModel):
 class RecurringTransactionCreateRequest(BaseModel):
     """
     Request body for creating a new recurring transaction rule.
-    
+
     All fields are required except paired_recurring_transaction_id, by_weekday,
     by_monthday, and end_date.
     """
@@ -84,32 +84,32 @@ class RecurringTransactionCreateRequest(BaseModel):
     start_date: str = Field(..., description="Start date (YYYY-MM-DD)")
     end_date: Optional[str] = Field(None, description="End date (YYYY-MM-DD) or NULL")
     is_active: bool = Field(True, description="Active by default")
-    
+
     @field_validator("by_weekday")
     @classmethod
     def validate_weekdays(cls, v: Optional[List[str]], info) -> Optional[List[str]]:
         """Validate weekday names for weekly frequency."""
         if v is None:
             return v
-        
+
         valid_weekdays = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
         for day in v:
             if day.lower() not in valid_weekdays:
                 raise ValueError(f"Invalid weekday: {day}. Must be one of {valid_weekdays}")
-        
+
         return [d.lower() for d in v]
-    
+
     @field_validator("by_monthday")
     @classmethod
     def validate_monthdays(cls, v: Optional[List[int]]) -> Optional[List[int]]:
         """Validate month day numbers for monthly frequency."""
         if v is None:
             return v
-        
+
         for day in v:
             if day < 1 or day > 31:
                 raise ValueError(f"Invalid monthday: {day}. Must be between 1 and 31")
-        
+
         return v
 
 
@@ -123,7 +123,7 @@ class RecurringTransactionCreateResponse(BaseModel):
 class RecurringTransactionUpdateRequest(BaseModel):
     """
     Request body for partially updating a recurring transaction rule.
-    
+
     All fields are optional. Only provided fields will be updated.
     Special semantics apply to start_date and is_active changes (see domain rules).
     """
@@ -148,32 +148,32 @@ class RecurringTransactionUpdateRequest(BaseModel):
         False,
         description="If true and start_date changed, delete past generated transactions"
     )
-    
+
     @field_validator("by_weekday")
     @classmethod
     def validate_weekdays(cls, v: Optional[List[str]]) -> Optional[List[str]]:
         """Validate weekday names."""
         if v is None:
             return v
-        
+
         valid_weekdays = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
         for day in v:
             if day.lower() not in valid_weekdays:
                 raise ValueError(f"Invalid weekday: {day}. Must be one of {valid_weekdays}")
-        
+
         return [d.lower() for d in v]
-    
+
     @field_validator("by_monthday")
     @classmethod
     def validate_monthdays(cls, v: Optional[List[int]]) -> Optional[List[int]]:
         """Validate month day numbers."""
         if v is None:
             return v
-        
+
         for day in v:
             if day < 1 or day > 31:
                 raise ValueError(f"Invalid monthday: {day}. Must be between 1 and 31")
-        
+
         return v
 
 
@@ -202,7 +202,7 @@ class RecurringTransactionDeleteResponse(BaseModel):
 class SyncRecurringTransactionsRequest(BaseModel):
     """
     Optional request body for sync endpoint.
-    
+
     Currently no fields required, but allows for future expansion
     (e.g., preview mode, max occurrences limit).
     """
@@ -220,7 +220,7 @@ class SyncRecurringTransactionsRequest(BaseModel):
 class SyncRecurringTransactionsResponse(BaseModel):
     """
     Response from sync endpoint.
-    
+
     Returns summary of transactions generated and caches updated.
     The sync operation is atomic and handles:
     - Paired recurring transfers (linked via paired_transaction_id)
@@ -231,7 +231,7 @@ class SyncRecurringTransactionsResponse(BaseModel):
     transactions_generated: int = Field(..., description="Total transactions created")
     rules_processed: int = Field(..., description="Number of recurring rules processed")
     accounts_updated: int = Field(
-        default=0, 
+        default=0,
         description="Number of accounts whose cached_balance was recomputed"
     )
     budgets_updated: int = Field(

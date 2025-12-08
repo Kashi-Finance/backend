@@ -6,15 +6,15 @@ Transactions represent individual money movements (income or outcome) tied to ac
 """
 
 from typing import List, Literal, Optional
-from pydantic import BaseModel, Field
 
+from pydantic import BaseModel, Field
 
 # --- Transaction creation models ---
 
 class TransactionCreateRequest(BaseModel):
     """
     Request to create a new transaction manually.
-    
+
     Used when user manually records a transaction (not from invoice OCR).
     All required fields must be provided by the user.
     """
@@ -47,7 +47,7 @@ class TransactionCreateRequest(BaseModel):
 class TransactionUpdateRequest(BaseModel):
     """
     Request to update an existing transaction.
-    
+
     All fields are optional - only provided fields will be updated.
     """
     account_id: Optional[str] = Field(
@@ -82,7 +82,7 @@ class TransactionUpdateRequest(BaseModel):
 class TransactionDetailResponse(BaseModel):
     """
     Response for GET /transactions/{transaction_id} - Single transaction details.
-    
+
     Includes all transaction fields plus convenience fields for display.
     """
     id: str = Field(..., description="Transaction UUID")
@@ -106,7 +106,7 @@ class TransactionDetailResponse(BaseModel):
 class TransactionListResponse(BaseModel):
     """
     Response for GET /transactions - List of user's transactions.
-    
+
     Supports pagination and filtering.
     """
     transactions: List[TransactionDetailResponse] = Field(..., description="List of transaction records")

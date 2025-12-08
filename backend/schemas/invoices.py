@@ -5,15 +5,15 @@ These models define the strict request/response contracts for invoice processing
 """
 
 from typing import List, Literal, Optional
-from pydantic import BaseModel, Field, model_validator
 
+from pydantic import BaseModel, Field, model_validator
 
 # --- Item models ---
 
 class PurchasedItemResponse(BaseModel):
     """
     A single item from a parsed receipt.
-    
+
     Maps to InvoiceAgent's PurchasedItem output.
     """
     description: str = Field(..., description="Item description (e.g., 'Leche deslactosada 1L')")
@@ -27,14 +27,14 @@ class PurchasedItemResponse(BaseModel):
 class CategorySuggestionResponse(BaseModel):
     """
     Category assignment suggestion from InvoiceAgent.
-    
+
     INVARIANT: One of the following MUST be true:
     - match_type="EXISTING" AND category_id is not None AND category_name is not None AND proposed_name is None
     - match_type="NEW_PROPOSED" AND category_id is None AND category_name is None AND proposed_name is not None
-    
+
     All four fields are ALWAYS present (never omitted).
     Fields that don't apply are explicitly set to null.
-    
+
     This design:
     - Makes Flutter/frontend type-safe (no missing key checks)
     - Enables backend validation of invariants
@@ -61,7 +61,7 @@ class CategorySuggestionResponse(BaseModel):
     def validate_category_invariant(self):
         """
         Validate that category_suggestion invariant is maintained.
-        
+
         INVARIANT:
         - If match_type="EXISTING": category_id and category_name must be non-None, proposed_name must be None
         - If match_type="NEW_PROPOSED": proposed_name must be non-None, category_id and category_name must be None
@@ -70,7 +70,7 @@ class CategorySuggestionResponse(BaseModel):
         category_id = self.category_id
         category_name = self.category_name
         proposed_name = self.proposed_name
-        
+
         if match_type == "EXISTING":
             if category_id is None or category_name is None:
                 raise ValueError(
@@ -93,7 +93,7 @@ class CategorySuggestionResponse(BaseModel):
                     "category_suggestion invariant violated: "
                     "match_type=NEW_PROPOSED requires category_id and category_name to be null"
                 )
-        
+
         return self
 
 
@@ -102,7 +102,7 @@ class CategorySuggestionResponse(BaseModel):
 class InvoiceOCRResponseInvalid(BaseModel):
     """
     Response when uploaded image cannot be processed.
-    
+
     This is returned when:
     - Image is not a receipt
     - Image is unreadable (too blurry, damaged, etc.)
@@ -124,7 +124,7 @@ class InvoiceOCRResponseInvalid(BaseModel):
 class InvoiceOCRResponseDraft(BaseModel):
     """
     Response when OCR successfully extracted invoice data.
-    
+
     This is a PREVIEW ONLY - nothing is persisted to DB yet.
     Frontend should show this to user for editing/confirmation.
     User calls /invoices/commit to actually save the transaction.
@@ -173,13 +173,13 @@ InvoiceOCRResponse = InvoiceOCRResponseDraft | InvoiceOCRResponseInvalid
 class InvoiceCommitRequest(BaseModel):
     """
     Request to commit (persist) an invoice after OCR and user confirmation.
-    
+
     The frontend sends the edited/confirmed data from the DRAFT response,
     along with the account and category selected by the user.
-    
-    IMPORTANT: The image is sent as base64 because it was NOT uploaded during the 
+
+    IMPORTANT: The image is sent as base64 because it was NOT uploaded during the
     OCR draft phase. The backend will upload it now during commit.
-    
+
     When committed, this will:
     - Upload receipt image to Supabase Storage
     - Create an invoice record with the uploaded image reference
@@ -212,19 +212,19 @@ class InvoiceCommitRequest(BaseModel):
         min_length=1,
         description="UUID of the expense category (user-selected or from suggestion)"
     )
-    
+
     @model_validator(mode="after")
     def normalize_purchased_items(self):
         """
         Normalize purchased_items to always be a string.
-        
+
         If frontend sends an array, join it with newlines.
         This provides backward compatibility while frontend migrates to string format.
         """
         if isinstance(self.purchased_items, list):
             self.purchased_items = "\n".join(self.purchased_items)
         return self
-    
+
     # Pydantic v2 config: enable type coercion, strip whitespace, forbid extra fields
     model_config = {
         "str_strip_whitespace": True,
@@ -235,7 +235,7 @@ class InvoiceCommitRequest(BaseModel):
 class InvoiceCommitResponse(BaseModel):
     """
     Response after successfully persisting an invoice and creating linked transaction.
-    
+
     Returns both the invoice ID and the automatically created transaction ID.
     """
     status: Literal["COMMITTED"] = Field(

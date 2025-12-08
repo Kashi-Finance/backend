@@ -10,8 +10,8 @@ This module defines request and response models for:
 
 from datetime import date
 from typing import List, Optional
-from pydantic import BaseModel, Field
 
+from pydantic import BaseModel, Field
 
 # =========================================================
 # Streak Response Models
@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 class StreakStatusResponse(BaseModel):
     """Current streak status for a user."""
-    
+
     current_streak: int = Field(
         ...,
         ge=0,
@@ -47,7 +47,7 @@ class StreakStatusResponse(BaseModel):
         ge=0,
         description="Days remaining before streak breaks (0 = breaks at end of today)"
     )
-    
+
     model_config = {
         "json_schema_extra": {
             "examples": [
@@ -66,7 +66,7 @@ class StreakStatusResponse(BaseModel):
 
 class StreakUpdateResponse(BaseModel):
     """Response after updating streak (from transaction/invoice creation)."""
-    
+
     current_streak: int = Field(
         ...,
         ge=0,
@@ -89,7 +89,7 @@ class StreakUpdateResponse(BaseModel):
         ...,
         description="Whether this update set a new longest streak record"
     )
-    
+
     model_config = {
         "json_schema_extra": {
             "examples": [
@@ -111,7 +111,7 @@ class StreakUpdateResponse(BaseModel):
 
 class ProfileStreakFields(BaseModel):
     """Streak fields that are part of the profile object."""
-    
+
     current_streak: int = Field(
         default=0,
         ge=0,
@@ -142,7 +142,7 @@ class ProfileStreakFields(BaseModel):
 
 class EngagementSummary(BaseModel):
     """Summary of user's engagement stats for dashboard display."""
-    
+
     current_streak: int = Field(
         ...,
         ge=0,
@@ -165,7 +165,7 @@ class EngagementSummary(BaseModel):
         ...,
         description="Whether user has logged any activity today"
     )
-    
+
     model_config = {
         "json_schema_extra": {
             "examples": [

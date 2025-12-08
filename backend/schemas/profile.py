@@ -7,15 +7,15 @@ Profiles contain user preferences and personal information (1:1 with auth.users)
 
 from datetime import date
 from typing import Optional
-from pydantic import BaseModel, Field
 
+from pydantic import BaseModel, Field
 
 # --- Profile response models ---
 
 class ProfileResponse(BaseModel):
     """
     Response for GET /profile - User profile details.
-    
+
     Contains all user profile fields including preferences and localization settings.
     """
     user_id: str = Field(..., description="User UUID (from auth.users)")
@@ -70,7 +70,7 @@ class ProfileResponse(BaseModel):
 class ProfileUpdateRequest(BaseModel):
     """
     Request to update user profile.
-    
+
     All fields are optional - only provided fields will be updated.
     At least one field must be provided.
     """
@@ -141,7 +141,7 @@ class ProfileUpdateResponse(BaseModel):
 class ProfileDeleteResponse(BaseModel):
     """
     Response after successfully deleting (anonymizing) profile.
-    
+
     Note: Profile is not physically deleted, only anonymized per DB delete rule.
     """
     status: str = Field("DELETED", description="Indicates the profile was successfully anonymized")
