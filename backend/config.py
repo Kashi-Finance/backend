@@ -29,11 +29,8 @@ class Settings:
             return ""
         return f"{self.SUPABASE_URL}/auth/v1/.well-known/jwks.json"
     
-    # Google Gemini API
+    # Google Gemini API (used for InvoiceAgent and Recommendation System)
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
-    
-    # DeepSeek API
-    DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
     
     # Supabase Storage Configuration
     SUPABASE_STORAGE_BUCKET: str = os.getenv("SUPABASE_STORAGE_BUCKET", "invoices")
