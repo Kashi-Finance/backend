@@ -49,8 +49,9 @@ router = APIRouter(prefix="/budgets", tags=["budgets"])
     Retrieve all budgets belonging to the authenticated user.
 
     This endpoint:
-    - Returns all user's budgets
+    - Returns paginated list of user's budgets
     - Supports filtering by frequency and active status
+    - Supports pagination via limit/offset query parameters
     - Ordered by creation date (newest first)
     - Only accessible to the budget owner (RLS enforced)
 
@@ -61,6 +62,8 @@ router = APIRouter(prefix="/budgets", tags=["budgets"])
 )
 async def list_budgets(
     auth_user: Annotated[AuthenticatedUser, Depends(get_authenticated_user)],
+    limit: int = Query(50, ge=1, le=100, description="Maximum number of budgets to return"),
+    offset: int = Query(0, ge=0, description="Number of budgets to skip for pagination"),
     frequency: Optional[str] = Query(None, description="Filter by frequency (daily|weekly|monthly|yearly|once)"),
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
 ) -> BudgetListResponse:
@@ -74,13 +77,13 @@ async def list_budgets(
 
     Step 2: Parse/Validate Request
     - No request body (GET endpoint)
-    - Query parameters: frequency, is_active
+    - Query parameters: limit, offset, frequency, is_active
 
     Step 3: Domain & Intent Filter
-    - Simple list request with optional filters
+    - Simple list request with optional filters and pagination
 
     Step 4: Call Service
-    - Call get_all_budgets() service function with filters
+    - Call get_all_budgets() service function with filters and pagination
 
     Step 5: Map Output -> ResponseModel
     - Convert budgets list to BudgetListResponse
@@ -90,7 +93,7 @@ async def list_budgets(
     """
     logger.info(
         f"Listing budgets for user {auth_user.user_id} "
-        f"(filters: frequency={frequency}, is_active={is_active})"
+        f"(limit={limit}, offset={offset}, filters: frequency={frequency}, is_active={is_active})"
     )
 
     supabase_client = get_supabase_client(auth_user.access_token)
@@ -99,6 +102,8 @@ async def list_budgets(
         budgets = await get_all_budgets(
             supabase_client=supabase_client,
             user_id=auth_user.user_id,
+            limit=limit,
+            offset=offset,
             frequency=frequency,
             is_active=is_active,
         )
@@ -145,7 +150,9 @@ async def list_budgets(
 
         return BudgetListResponse(
             budgets=budget_responses,
-            count=len(budget_responses)
+            count=len(budget_responses),
+            limit=limit,
+            offset=offset
         )
 
     except Exception as e:

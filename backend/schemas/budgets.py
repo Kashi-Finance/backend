@@ -60,10 +60,12 @@ class BudgetResponse(BaseModel):
 
 class BudgetListResponse(BaseModel):
     """
-    Response for listing user budgets.
+    Response for listing user budgets with pagination support.
     """
     budgets: List[BudgetResponse] = Field(..., description="List of user's budgets")
-    count: int = Field(..., description="Total number of budgets returned")
+    count: int = Field(..., description="Number of budgets returned in this response")
+    limit: int = Field(..., description="Maximum number of budgets requested")
+    offset: int = Field(..., description="Number of budgets skipped for pagination")
 
 
 # --- Budget create models ---

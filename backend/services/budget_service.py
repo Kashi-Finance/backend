@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 async def get_all_budgets(
     supabase_client: Client,
     user_id: str,
+    limit: int = 50,
+    offset: int = 0,
     frequency: Optional[str] = None,
     is_active: Optional[bool] = None,
 ) -> List[Dict[str, Any]]:
@@ -33,6 +35,8 @@ async def get_all_budgets(
     Args:
         supabase_client: Authenticated Supabase client
         user_id: The authenticated user's ID
+        limit: Maximum number of budgets to return (default 50)
+        offset: Number of budgets to skip for pagination (default 0)
         frequency: Optional filter by budget frequency (daily/weekly/monthly/yearly/once)
         is_active: Optional filter by active status
 
@@ -45,7 +49,7 @@ async def get_all_budgets(
     """
     logger.debug(
         f"Fetching budgets with categories for user {user_id} "
-        f"(filters: frequency={frequency}, is_active={is_active})"
+        f"(limit={limit}, offset={offset}, filters: frequency={frequency}, is_active={is_active})"
     )
 
     # Use Supabase foreign key syntax to join budget_category and category
@@ -67,7 +71,8 @@ async def get_all_budgets(
     if is_active is not None:
         query = query.eq("is_active", is_active)
 
-    result = query.order("created_at", desc=True).execute()
+    # Apply pagination
+    result = query.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
 
     budgets_raw = cast(List[Dict[str, Any]], result.data or [])
 
