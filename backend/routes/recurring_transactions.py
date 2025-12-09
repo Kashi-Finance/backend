@@ -16,7 +16,7 @@ Endpoints:
 import logging
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
 from backend.auth.dependencies import AuthenticatedUser, get_authenticated_user
 from backend.db.client import get_supabase_client
@@ -54,7 +54,8 @@ router = APIRouter(prefix="/recurring-transactions", tags=["recurring-transactio
     Retrieve all recurring transaction rules for the authenticated user.
 
     This endpoint:
-    - Returns all user's recurring rules
+    - Returns paginated list of user's recurring rules
+    - Supports pagination via limit/offset query parameters
     - Ordered by creation date (newest first)
     - Only accessible to the rule owner (RLS enforced)
 
@@ -64,17 +65,21 @@ router = APIRouter(prefix="/recurring-transactions", tags=["recurring-transactio
     """
 )
 async def list_recurring_transactions(
-    auth_user: Annotated[AuthenticatedUser, Depends(get_authenticated_user)]
+    auth_user: Annotated[AuthenticatedUser, Depends(get_authenticated_user)],
+    limit: int = Query(50, ge=1, le=100, description="Maximum number of rules to return"),
+    offset: int = Query(0, ge=0, description="Number of rules to skip for pagination")
 ) -> RecurringTransactionListResponse:
     """List all recurring transaction rules for the authenticated user."""
-    logger.info(f"Listing recurring transactions for user {auth_user.user_id}")
+    logger.info(f"Listing recurring transactions for user {auth_user.user_id} (limit={limit}, offset={offset})")
 
     supabase_client = get_supabase_client(auth_user.access_token)
 
     try:
         rules = await get_all_recurring_transactions(
             supabase_client=supabase_client,
-            user_id=auth_user.user_id
+            user_id=auth_user.user_id,
+            limit=limit,
+            offset=offset
         )
 
         # Helper to coerce DB values
@@ -124,7 +129,9 @@ async def list_recurring_transactions(
 
         return RecurringTransactionListResponse(
             recurring_transactions=rule_responses,
-            count=len(rule_responses)
+            count=len(rule_responses),
+            limit=limit,
+            offset=offset
         )
 
     except Exception as e:

@@ -52,7 +52,9 @@ class RecurringTransactionResponse(BaseModel):
 class RecurringTransactionListResponse(BaseModel):
     """Paginated list of recurring transaction rules."""
     recurring_transactions: List[RecurringTransactionResponse]
-    count: int = Field(..., description="Total number of rules returned")
+    count: int = Field(..., description="Number of rules returned in this response")
+    limit: int = Field(..., description="Maximum number of rules requested")
+    offset: int = Field(..., description="Number of rules skipped for pagination")
 
 
 class RecurringTransactionCreateRequest(BaseModel):

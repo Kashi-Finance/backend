@@ -14,7 +14,9 @@ logger = logging.getLogger(__name__)
 
 async def get_all_recurring_transactions(
     supabase_client: Any,
-    user_id: str
+    user_id: str,
+    limit: int = 50,
+    offset: int = 0
 ) -> List[Dict[str, Any]]:
     """
     Retrieve all recurring transaction rules for a user.
@@ -22,6 +24,8 @@ async def get_all_recurring_transactions(
     Args:
         supabase_client: Authenticated Supabase client
         user_id: User UUID from auth token
+        limit: Maximum number of rules to return (default 50)
+        offset: Number of rules to skip for pagination (default 0)
 
     Returns:
         List of recurring transaction dicts (ordered by created_at desc)
@@ -29,12 +33,13 @@ async def get_all_recurring_transactions(
     Security:
         RLS enforces user_id = auth.uid() automatically
     """
-    logger.info(f"Fetching all recurring transactions for user {user_id}")
+    logger.info(f"Fetching recurring transactions for user {user_id} (limit={limit}, offset={offset})")
 
     result = supabase_client.table("recurring_transaction") \
         .select("*") \
         .eq("user_id", user_id) \
         .order("created_at", desc=True) \
+        .range(offset, offset + limit - 1) \
         .execute()
 
     return result.data if result.data else []
