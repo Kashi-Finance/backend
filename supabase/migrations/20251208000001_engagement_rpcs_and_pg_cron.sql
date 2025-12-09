@@ -258,28 +258,33 @@ COMMENT ON FUNCTION public.reset_weekly_streak_freezes IS
 
 
 -- =========================================================
--- SECTION 2: PG_CRON SCHEDULING
+-- SECTION 2: PG_CRON SCHEDULING (OPTIONAL)
 -- =========================================================
 
--- Schedule weekly streak freeze reset
--- Runs every Monday at 00:00 UTC
+-- NOTE: pg_cron scheduling is optional and only available in production
+-- Local Supabase instances don't have pg_cron enabled by default
 -- 
+-- To enable in production Supabase:
+-- 1. Go to Database → Extensions in Supabase Dashboard
+-- 2. Enable pg_cron extension
+-- 3. Run the following SQL manually in the SQL editor:
+--
+-- SELECT cron.schedule(
+--     'reset-streak-freezes-weekly',
+--     '0 0 * * 1',
+--     $$SELECT public.reset_weekly_streak_freezes()$$
+-- );
+--
 -- Cron expression: '0 0 * * 1'
 --   0 = minute (00)
 --   0 = hour (00:00 UTC)
 --   * = day of month (any)
 --   * = month (any)
 --   1 = day of week (Monday, where 0=Sunday)
-
-SELECT cron.schedule(
-    'reset-streak-freezes-weekly',  -- Job name (unique identifier)
-    '0 0 * * 1',                    -- Cron expression: Monday 00:00 UTC
-    $$SELECT public.reset_weekly_streak_freezes()$$  -- SQL to execute
-);
-
--- Add comment for documentation
-COMMENT ON EXTENSION pg_cron IS 
-'pg_cron is used to schedule the weekly streak freeze reset. Job "reset-streak-freezes-weekly" runs every Monday at 00:00 UTC.';
+--
+-- For local development without pg_cron:
+-- The reset_weekly_streak_freezes() function can be called manually
+-- or via a scheduled job in your deployment environment
 
 
 -- =========================================================
