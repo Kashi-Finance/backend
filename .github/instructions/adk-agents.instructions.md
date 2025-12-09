@@ -1,33 +1,35 @@
 ---
 applyTo: '**'
 ---
-# adk Agents Instructions
+# AI Agents & LLM Workflows Instructions
 
-This document defines how adk agents are structured and how they interact with the API layer.
+This document defines how AI-powered components (agents and LLM workflows) are structured and how they interact with the API layer.
 
-**CRITICAL: Before creating or modifying any ADK agent, you MUST:**
-1. Conduct a **deep review** of the **Google Agent Development Kit (ADK)** documentation
-2. Follow the **best practices and patterns** described at: 🔗 [https://google.github.io/adk-docs/](https://google.github.io/adk-docs/)
-3. Use ADK only when **agentic reasoning or tool orchestration is truly needed**, not for deterministic flows
-4. Always use the **most recent version** of the Google ADK documentation when creating or modifying adk agents or their schemas
+> **Architecture Note (December 2025):** The project uses simplified LLM workflows instead of complex multi-agent architectures. The recommendation system uses Gemini with Google Search grounding - all product recommendations come from real, current web data.
 
 
-## 1. The Only Allowed adk Agents
+## 1. Active AI Components
 
-There are exactly four (4) adk agents in this project:
+There are exactly **two (2)** AI-powered components in this project:
 
-1. InvoiceAgent  **Note: Currently implemented as a single-shot multimodal LLM workflow, NOT using ADK**
-2. RecommendationCoordinatorAgent
-3. SearchAgent
-4. FormatterAgent
+### 1.1 InvoiceAgent (Single-Shot Multimodal Workflow)
+- **Implementation:** Single-shot Gemini vision call
+- **Model:** Gemini (with vision capabilities)
+- **Purpose:** OCR and structured extraction from receipt images
+- **NOT an ADK agent:** Uses direct Gemini API, not Google ADK
+
+### 1.2 Recommendation System (Web-Grounded LLM)
+- **Implementation:** Single-shot Gemini call with Google Search grounding
+- **Model:** Gemini 2.5 Flash (`gemini-2.5-flash`)
+- **Purpose:** Product recommendations based on user goals with REAL web data
+- **NOT an ADK agent:** Uses Google Gen AI SDK with Google Search tool
 
 No other agents are allowed unless explicitly approved.
-Do not rename them, do not create "v2" variants, and do not add subagents unless instructed.
 
 
-## 2. Agent Responsibilities and Boundaries
+## 2. Component Details
 
-### 2.1 InvoiceAgent ⚠️ **Simplified Architecture**
+### 2.1 InvoiceAgent ⚠️ **Single-Shot Multimodal Workflow**
 
 **Current Implementation:**
 InvoiceAgent is implemented as a **single-shot multimodal vision extraction workflow** using Gemini directly, **NOT using ADK**. This is because invoice extraction is a deterministic task that doesn't require agentic reasoning or tool orchestration.
@@ -68,20 +70,10 @@ def run_invoice_agent(
 - ✅ Deterministic: Temperature=0.0 for structured extraction
 - ✅ Response format: JSON with `response_mime_type="application/json"`
 
-**Why NOT ADK?**
-Invoice extraction is a deterministic, single-step task:
-- No need for agentic reasoning or decision-making
-- No need for dynamic tool selection
-- All required context is known upfront
-- Output schema is fixed and predictable
-
-Using ADK would add unnecessary complexity, latency, and cost without providing value.
-
 **Rules:**
 - The agent MUST output fields that allow the backend to build the canonical `EXTRACTED_INVOICE_TEXT_FORMAT`
 - The agent MUST refuse to answer anything not related to invoice/receipt extraction
 - The agent MUST NOT write to the database (persistence handled by API layer)
-- The agent MUST NOT leak sensitive user information beyond what's required for extraction
 - User categories are fetched by the endpoint BEFORE calling the agent (not by the agent itself)
 
 **Canonical Format:**
@@ -98,144 +90,177 @@ Purchased Items:
 """
 ```
 
-### 2.2 RecommendationCoordinatorAgent
-Purpose:
-- Orchestrate recommendation logic for purchases / wishlist / budgets / planning.
-- Take the user's intent (goal, budget hint, time horizon, store preference, country/profile context).
-- Use internal tools to:
-  - check if the request is valid and in-scope,
-  - search for candidate products / offers,
-  - organize results,
-  - produce a final recommendation response that the app can show.
+---
 
-This agent is the single entry point for recommendation-style features from the API layer.
+### 2.2 Recommendation System ⚠️ **Web-Grounded LLM Architecture**
 
-Most importantly:
-- `SearchAgent` and `FormatterAgent` are NOT called directly by the API layer.
-- They are AgentTools exclusively used internally by `RecommendationCoordinatorAgent`.
+> **Upgraded January 2025:** The previous Perplexity Sonar architecture was replaced with Gemini + Google Search grounding. All product recommendations now come from real, current web data via Google Search.
 
-The RecommendationCoordinatorAgent MUST:
-- Reject requests that are out of domain (e.g. mental health advice, random personal questions).
-- Enforce budget and profile constraints (country, currency_preference, etc.) provided by the API layer.
-- Produce a typed structured output that the API can map into a Pydantic ResponseModel.
+**Current Implementation:**
+The recommendation system uses **Gemini 2.5 Flash** with the **Google Search grounding tool**. This approach:
+- Returns REAL product data from live Google Search results
+- Provides verified URLs, current prices, and actual seller information
+- Single API call (web search is automatic via grounding tool)
+- JSON output parsed from text response (see limitation below)
 
-### 2.3 SearchAgent (AgentTool)
-Purpose:
-- Search, collect, or compare potential products/offers/prices given constraints like:
-  - user goal ("laptop para diseño gráfico que no sea gamer"),
-  - budget_hint,
-  - preferred_store,
-  - user country / availability.
-- Return raw candidate options (product name, store, price, link/reference, etc.).
+**Important Limitation:**
+Google Search grounding tool **does not support** `response_mime_type='application/json'` or `response_schema`. When used together, Gemini returns a 400 error. We work around this by:
+1. Asking for JSON in the prompt
+2. Parsing JSON from the response text
+3. Stripping markdown code blocks if present
 
-This agent is an AgentTool, not a top-level public agent. It is only called by RecommendationCoordinatorAgent.
+**Architecture:**
+```
+User Query → FastAPI Endpoint → recommendation_service.py → Gemini API → JSON Response → Pydantic Model
+                                                              ↓
+                                                    (Google Search grounding)
+                                                              ↓
+                                                    Real product data returned
+```
 
-Rules:
-- It MUST refuse prompts that are not about product/offer discovery in the financial planning / wishlist context.
-- It MUST NOT answer random unrelated questions.
-- It MUST NOT persist anything to DB.
-- It MUST return structured data, not free-form chatty prose.
+**Service Location:**
+- `backend/services/recommendation_service.py` - Main service file
+- `backend/agents/recommendation/prompts.py` - System and user prompt templates (XML-structured)
 
-### 2.4 FormatterAgent (AgentTool)
-Purpose:
-- Take raw results (e.g. list of candidate products from SearchAgent) and shape them into a clean, concise, user-facing structure:
-  - normalized prices with currency,
-  - short explanation of why each option fits the user's stated goal and budget,
-  - any constraints or warnings (e.g. "over budget", "low stock").
-- Produce a final structured summary that can be sent back through the API to the mobile client.
+**Key Functions:**
+```python
+async def query_recommendations(
+    supabase_client: Client,
+    user_id: str,
+    query_raw: str,
+    budget_hint: Optional[Decimal] = None,
+    preferred_store: Optional[str] = None,
+    user_note: Optional[str] = None,
+    extra_details: Optional[Dict[str, Any]] = None,
+) -> RecommendationQueryResponseOK | RecommendationQueryResponseNoValidOption
 
-This agent is also an AgentTool, ONLY callable from RecommendationCoordinatorAgent.
-
-Rules:
-- It MUST NOT invent financial advice outside of the purchase/recommendation domain.
-- It MUST produce deterministic, well-structured fields (no giant paragraphs unless explicitly required).
-- It MUST use consistent field naming and currency formatting so the frontend can render easily.
-- It MUST NOT directly persist anything.
-
-Summary of orchestration:
-
-    RecommendationCoordinatorAgent
-      ├── uses SearchAgent (AgentTool)
-      └── uses FormatterAgent (AgentTool)
-
-The FastAPI endpoints should call RecommendationCoordinatorAgent for recommendation-related flows.
-They should never call SearchAgent or FormatterAgent directly.
+async def retry_recommendations(...) -> ...  # Same interface, for retries
+```
 
 
-## 3. Input / Output Contracts
+**Possible Statuses:**
+- `OK`: Returns 1-3 structured product recommendations with real web data
+- `NO_VALID_OPTION`: No suitable products found or out-of-scope request
+- `NEEDS_CLARIFICATION`: *Deprecated* (single-shot can't ask follow-up questions)
 
-All adk agents MUST define:
-- A strictly typed Python interface, including type hints for every parameter and the return type.
-- An ADK `input_schema` and `output_schema` that:
-  - mirror the function signature,
-  - only use JSON-serializable field types,
-  - describe each field's meaning, required/optional status, and any constraints.
-- No silent defaults. If a field is required, mark it required. Missing required fields should cause the agent to return a structured error or ask for that field (depending on our ADK pattern).
+**Configuration:**
+- `GOOGLE_API_KEY`: Required environment variable
+- Model: `gemini-2.5-flash`
+- Temperature: `0.2` (near-deterministic for factual queries)
+- Response format: JSON parsed from text (Google Search tool doesn't support response_schema)
+- Web grounding: Google Search tool enabled
 
-The output MUST be structured data:
-- For InvoiceAgent: structured invoice data (store_name, total_amount, etc.) and all fields required to render EXTRACTED_INVOICE_TEXT_FORMAT.
-- For RecommendationCoordinatorAgent: structured recommendations, not plain text blobs.
-- For SearchAgent: raw candidate offers, structured as machine-readable rows/items.
-- For FormatterAgent: a cleaned, final response object ready for the frontend.
-
-Never return unbounded free text unless the spec explicitly requires it.
-
-
-## 4. Domain Guardrail / Out-of-Scope Rejection
-
-Every adk agent MUST have a guardrail:
-- If the incoming request is unrelated to its domain, it MUST NOT attempt to answer.
-- Instead, it should return a controlled "out_of_scope" style response that indicates rejection.
-
-The API layer will convert that into an HTTP 400 with `{"error":"out_of_scope", ...}`.
-
-Reasons:
-- Latency / cost: we do not call Gemini / ADK for nonsense.
-- Safety: we avoid exposing user financial context to irrelevant prompts.
-- UX consistency: the app sees a predictable error format instead of random LLM chatter.
+**Grounding Metadata:**
+The response includes grounding metadata with:
+- `web_search_queries`: List of search queries used by Gemini
+- `grounding_chunks`: List of web sources with URIs and titles
 
 
-## 5. Privacy and Persistence
+## 3. Deprecated Components
 
-- adk agents do NOT access the database directly.
-- adk agents do NOT bypass Row Level Security.
-- adk agents do NOT try to store or retrieve user financial history on their own.
-- If persistence is needed, the agent returns a structured object and the API layer (or a service behind the API layer) will handle storage under RLS, following backend/db.instructions.md.
+The following components are **deprecated** and should NOT be referenced or used:
 
-In other words:
-- InvoiceAgent returns parsed invoice data.
-- The API layer (or DB service) later persists that data, including `invoice.extracted_text` in the exact canonical format.
-- RecommendationCoordinatorAgent returns structured recommendations.
-- The API layer (or DB service) can save relevant parts (wishlist updates, etc.) according to backend/db.instructions.md.
+| Component | Status | Replaced By |
+|-----------|--------|-------------|
+| RecommendationCoordinatorAgent | ❌ Deprecated | Prompt Chaining in `recommendation_service.py` |
+| SearchAgent (AgentTool) | ❌ Deprecated | Built into system prompt logic |
+| FormatterAgent (AgentTool) | ❌ Deprecated | Built into system prompt logic |
+| `coordinator.py` | ❌ Deleted | N/A |
+| `tools.py` | ❌ Deleted | N/A |
+| `schemas.py` (ADK) | ❌ Deleted | Pydantic schemas in `backend/schemas/` |
 
-The agent itself NEVER writes.
-
-
-## 6. Logging and Sensitive Data
-
-- adk agents must avoid logging:
-  - full invoice images,
-  - raw personal financial amounts,
-  - personally identifying information.
-- It's acceptable to log high-level events like:
-  - "InvoiceAgent extracted store_name='Supertienda XYZ' total_amount='123.45 GTQ'"
-    - If logged, redact or round as needed; do not dump the entire receipt.
-- Never log private tokens, Supabase headers, or auth debug info.
+**Do NOT:**
+- Create new ADK agents
+- Reference the old multi-agent architecture
+- Import from `backend.agents.recommendation.coordinator`
+- Import from `backend.agents.recommendation.tools`
 
 
-## 7. Interaction Pattern With FastAPI
+## 4. Input/Output Contracts
 
-- The FastAPI endpoint is the gateway.
-- The endpoint:
-  - authenticates the caller via Supabase Auth,
-  - validates and normalizes the request (country, currency_preference, etc.),
-  - forces intent/domain filtering,
-  - then calls the correct agent method with a well-typed payload.
-- The agent returns structured output (or out_of_scope).
-- The endpoint converts that output into a strict Pydantic ResponseModel and returns it.
+All AI components MUST define:
+- Strictly typed Python interfaces with type hints
+- Pydantic models for request/response validation
+- JSON-serializable output only
 
-Agents MUST assume:
-- They are NOT talking directly to an end-user.
-- They are being called programmatically with already validated, minimal, domain-specific inputs.
+**InvoiceAgent Output:**
+- Structured invoice data (store_name, total_amount, items, etc.)
+- Fields required to render `EXTRACTED_INVOICE_TEXT_FORMAT`
+- Status: `DRAFT`, `INVALID_IMAGE`, or `OUT_OF_SCOPE`
 
-Always use the most recent version of the Google ADK documentation when creating or modifying adk agents, including their AgentTools and schemas.
+**Recommendation System Output:**
+- Status: `OK` or `NO_VALID_OPTION`
+- For `OK`: `results_for_user` list (max 3 products) with: product_title, price_total, seller_name, url, pickup_available, warranty_info, copy_for_user, badges
+- For `NO_VALID_OPTION`: optional `reason` field explaining why
+
+Never return unbounded free text. Always use structured JSON.
+
+
+## 5. Domain Guardrails
+
+Every AI component MUST have guardrails:
+
+**InvoiceAgent:**
+- Rejects non-receipt images
+- Rejects non-image inputs
+- Returns `INVALID_IMAGE` or `OUT_OF_SCOPE` for invalid requests
+
+**Recommendation System:**
+- Rejects prohibited content (sexual, weapons, illegal)
+- Rejects non-product queries (mental health, relationship advice)
+- Returns `NO_VALID_OPTION` with reason for out-of-scope
+
+The API layer converts rejections into HTTP 400 with `{"error": "out_of_scope", ...}`.
+
+
+## 6. Privacy and Persistence
+
+- AI components do NOT access the database directly
+- AI components do NOT bypass Row Level Security
+- AI components do NOT store or retrieve user data on their own
+- The API layer handles all persistence under RLS
+
+**Pattern:**
+1. Endpoint fetches user context (profile, categories) via Supabase
+2. Context is passed to AI component in the prompt
+3. AI component returns structured output
+4. Endpoint persists data according to `db.instructions.md`
+
+
+## 7. Logging Guidelines
+
+**DO log:**
+- High-level events: "InvoiceAgent called", "Recommendations returned OK"
+- Performance metrics: response time, token usage
+- Error conditions: validation failures, API errors
+
+**DO NOT log:**
+- Full invoice images or receipt text
+- Personal financial amounts
+- User PII (names, addresses, account numbers)
+- API keys or tokens
+
+
+## 8. Adding New AI Components
+
+If a new AI component is needed:
+
+1. **Evaluate if ADK is truly needed:**
+   - Does the task require multi-step reasoning?
+   - Does it need dynamic tool selection?
+   - Can it be solved with a single prompt?
+
+2. **Prefer simple architectures:**
+   - Single-shot prompts for deterministic tasks
+   - Prompt Chaining for complex but predictable flows
+   - ADK only when agentic reasoning is unavoidable
+
+3. **Follow the established patterns:**
+   - Fetch context before calling the AI component
+   - Use structured JSON output
+   - Handle errors gracefully (return structured error, never 500)
+   - Document the component in this file
+
+---
+
+*Last Updated: December 2025*
