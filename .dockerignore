@@ -40,7 +40,9 @@ htmlcov/
 tests/
 
 # Documentation and markdown files (not needed in container)
+# Exception: README.md is required by pyproject.toml for package metadata
 *.md
+!README.md
 docs/
 DECISIONS/
 

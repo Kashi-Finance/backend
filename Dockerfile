@@ -24,7 +24,8 @@ ENV UV_LINK_MODE=copy \
 
 # Copy dependency files first to leverage Docker layer caching
 # Changes to application code won't invalidate the dependency layer
-COPY pyproject.toml uv.lock ./
+# README.md is required by pyproject.toml for package metadata
+COPY pyproject.toml uv.lock README.md ./
 
 # Install Python dependencies using uv sync (reads pyproject.toml + uv.lock)
 # --frozen ensures we use exact versions from uv.lock
