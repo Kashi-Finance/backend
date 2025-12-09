@@ -133,6 +133,7 @@ async def list_budgets(
                 user_id=_as_str(b.get("user_id")),
                 name=_as_str(b.get("name")) if b.get("name") else "Presupuesto",  # Optional field
                 limit_amount=_as_float(b.get("limit_amount")),
+                currency=_as_str(b.get("currency", "GTQ")),  # Currency from profile
                 frequency=b.get("frequency", "monthly"),  # type: ignore
                 interval=_as_int(b.get("interval")),
                 start_date=_as_str(b.get("start_date")),
@@ -254,6 +255,7 @@ async def create_new_budget(
             user_id=_as_str(created_budget.get("user_id")),
             name=created_budget.get("name") or "Presupuesto",
             limit_amount=_as_float(created_budget.get("limit_amount")),
+            currency=_as_str(created_budget.get("currency", "GTQ")),  # Currency from profile
             frequency=created_budget.get("frequency", "monthly"),  # type: ignore
             interval=_as_int(created_budget.get("interval")),
             start_date=_as_str(created_budget.get("start_date")),
@@ -351,6 +353,7 @@ async def get_budget(
             user_id=_as_str(budget.get("user_id")),
             name=budget.get("name"),  # Optional field
             limit_amount=_as_float(budget.get("limit_amount")),
+            currency=_as_str(budget.get("currency", "GTQ")),  # Currency from profile
             frequency=budget.get("frequency", "monthly"),  # type: ignore
             interval=_as_int(budget.get("interval")),
             start_date=_as_str(budget.get("start_date")),
@@ -456,6 +459,7 @@ async def update_existing_budget(
             user_id=_as_str(updated_budget.get("user_id")),
             name=updated_budget.get("name"),  # Optional field
             limit_amount=_as_float(updated_budget.get("limit_amount")),
+            currency=_as_str(updated_budget.get("currency", "GTQ")),  # Currency from profile
             frequency=updated_budget.get("frequency", "monthly"),  # type: ignore
             interval=_as_int(updated_budget.get("interval")),
             start_date=_as_str(updated_budget.get("start_date")),
