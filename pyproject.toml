@@ -48,6 +48,9 @@ packages = ["backend"]
 dev = [
     "pytest>=8.4.2",
     "pytest-asyncio>=0.24.0",
+    "black>=23.12.1",
+    "mypy>=1.8.0",
+    "ruff>=0.1.0",
 ]
 
 [tool.pytest.ini_options]
