@@ -120,6 +120,7 @@ jobs:
           context: .
           file: ./Dockerfile
           push: false
+          load: true  # Load image into Docker daemon for testing
           tags: kashi-backend:ci-test
           cache-from: type=gha
           cache-to: type=gha,mode=max
