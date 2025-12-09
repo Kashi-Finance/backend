@@ -74,3 +74,12 @@ gcloud run deploy kashi-backend-staging \
   --region=us-central1 \
   --allow-unauthenticated
 ```
+
+
+## Database Migrations
+
+```bash
+supabase login
+supabase link --project-ref gzdwagvbbykzwwdesuac
+supabase db push
+```
