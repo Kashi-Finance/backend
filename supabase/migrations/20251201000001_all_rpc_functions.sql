@@ -590,6 +590,7 @@ DECLARE
     v_processed_paired_rules UUID[] := ARRAY[]::UUID[];  -- Track already-processed paired rules
     v_account_id UUID;
     v_category_id UUID;
+    v_process_as_standalone BOOLEAN;  -- Flag to control standalone processing
 BEGIN
     -- =========================================================================
     -- PHASE 1: Generate transactions from recurring rules
@@ -615,6 +616,7 @@ BEGIN
         
         v_rules_count := v_rules_count + 1;
         v_next_occurrence := v_rule.next_run_date;
+        v_process_as_standalone := TRUE;  -- Default to standalone, override if paired processing succeeds
         
         -- Check if this is a paired recurring transfer
         IF v_rule.paired_recurring_transaction_id IS NOT NULL THEN
@@ -628,6 +630,8 @@ BEGIN
             
             -- If paired rule exists and is valid, process as a transfer pair
             IF v_paired_rule.id IS NOT NULL THEN
+                v_process_as_standalone := FALSE;  -- Will process as paired transfer
+                
                 -- Mark paired rule as processed so we don't double-process
                 v_processed_paired_rules := array_append(v_processed_paired_rules, v_paired_rule.id);
                 
@@ -692,13 +696,12 @@ BEGIN
                 SET next_run_date = v_next_occurrence, updated_at = NOW()
                 WHERE id IN (v_rule.id, v_paired_rule.id);
                 
-            ELSE
-                -- Paired rule not found/inactive, process as standalone
-                GOTO process_standalone;
             END IF;
-        ELSE
-            -- Process as standalone recurring transaction
-            <<process_standalone>>
+            -- If paired rule not found/inactive, v_process_as_standalone remains TRUE
+        END IF;
+        
+        -- Process as standalone recurring transaction (if not processed as paired)
+        IF v_process_as_standalone THEN
             WHILE v_next_occurrence <= p_today LOOP
                 IF v_rule.end_date IS NOT NULL AND v_next_occurrence > v_rule.end_date THEN
                     EXIT;
