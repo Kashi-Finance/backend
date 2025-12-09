@@ -63,8 +63,10 @@ def get_jwks_client() -> PyJWKClient:
         logger.info(f"Initializing JWKS client with URL: {jwks_url}")
         _jwks_client = PyJWKClient(
             jwks_url,
-            cache_keys=True,  # Enable caching (default TTL is 300 seconds)
+            cache_keys=True,  # Enable individual key caching with LRU
             max_cached_keys=16,  # Reasonable limit for key rotation scenarios
+            cache_jwk_set=True,  # Enable JWK Set caching
+            lifespan=3600,  # Cache JWK Set for 1 hour (3600s)
         )
 
     return _jwks_client

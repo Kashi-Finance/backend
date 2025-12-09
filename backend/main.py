@@ -10,6 +10,7 @@ import os
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
 from backend.routes.accounts import router as accounts_router
@@ -113,6 +114,18 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# Enable Gzip compression for responses > 1KB
+# This reduces bandwidth usage for API responses, especially beneficial for:
+# - Transaction lists
+# - Budget data with multiple categories
+# - Invoice extracted_text
+# - Recommendation results
+# Compression ratio typically 60-80% for JSON responses
+app.add_middleware(
+    GZipMiddleware,
+    minimum_size=1000  # Only compress responses larger than 1KB
 )
 
 # Register routers
