@@ -203,12 +203,13 @@ def get_invoice_image_url(
             expires_in=expires_in
         )
         # Extract URL from response - handle both dict-like and object responses
+        url: str
         if isinstance(response, dict):
-            url = response.get("signedURL") or response.get("signed_url") or str(response)
+            url = str(response.get("signedURL") or response.get("signed_url") or response)
         elif hasattr(response, "signedURL"):
-            url = response.signedURL
+            url = str(response.signedURL)
         elif hasattr(response, "signed_url"):
-            url = response.signed_url
+            url = str(response.signed_url)
         else:
             url = str(response)
 

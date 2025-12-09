@@ -115,7 +115,7 @@ async def create_transaction(
         raise ValueError(f"Invalid flow_type: {flow_type}. Must be 'income' or 'outcome'")
 
     # Prepare transaction record
-    transaction_data = {
+    transaction_data: Dict[str, Any] = {
         "user_id": user_id,
         "account_id": account_id,
         "category_id": category_id,

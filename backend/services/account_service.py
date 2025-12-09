@@ -146,7 +146,7 @@ async def create_account(
             )
         raise
 
-    account_data = {
+    account_data: Dict[str, Any] = {
         "user_id": user_id,
         "name": name,
         "type": account_type,
