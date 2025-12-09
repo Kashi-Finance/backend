@@ -8,7 +8,6 @@ Wishlists represent user purchase goals (what they want to buy), and
 wishlist_items represent specific store options saved from recommendation flow.
 """
 
-import json
 import logging
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, List, Optional, cast
@@ -247,7 +246,7 @@ async def create_wishlist(
                 "p_target_date": target_date,
                 "p_preferred_store": preferred_store,
                 "p_user_note": user_note,
-                "p_items": json.dumps(items_jsonb)  # Convert to JSON string
+                "p_items": items_jsonb  # Pass as list, Supabase client handles JSONB conversion
             }
         ).execute()
 
