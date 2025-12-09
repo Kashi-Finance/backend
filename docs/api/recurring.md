@@ -88,6 +88,12 @@ Array of day numbers (1-31):
 
 **Purpose:** List all recurring transaction rules.
 
+**Query Parameters:**
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `limit` | integer | 50 | Maximum rules to return (1-100) |
+| `offset` | integer | 0 | Number of rules to skip |
+
 **Response:**
 ```json
 {
@@ -113,9 +119,16 @@ Array of day numbers (1-31):
       "updated_at": "..."
     }
   ],
-  "count": 1
+  "count": 1,
+  "limit": 50,
+  "offset": 0
 }
 ```
+
+**Pagination:**
+- Returns up to `limit` rules (max 100)
+- Use `offset` to fetch additional pages
+- Example: `?limit=20&offset=20` fetches rules 21-40
 
 **Status Codes:** 200, 401, 500
 

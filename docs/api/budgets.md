@@ -78,10 +78,12 @@
 **Purpose:** List all budgets with their linked categories.
 
 **Query Parameters:**
-| Param | Type | Description |
-|-------|------|-------------|
-| `frequency` | string | Filter by frequency |
-| `is_active` | boolean | Filter by active status |
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `limit` | integer | 50 | Maximum budgets to return (1-100) |
+| `offset` | integer | 0 | Number of budgets to skip |
+| `frequency` | string | - | Filter by frequency |
+| `is_active` | boolean | - | Filter by active status |
 
 **Response:**
 ```json
@@ -112,9 +114,16 @@
       "updated_at": "..."
     }
   ],
-  "count": 1
+  "count": 1,
+  "limit": 50,
+  "offset": 0
 }
 ```
+
+**Pagination:**
+- Returns up to `limit` budgets (max 100)
+- Use `offset` to fetch additional pages
+- Example: `?limit=20&offset=20` fetches budgets 21-40
 
 **Category Fields:**
 All category fields are returned:
