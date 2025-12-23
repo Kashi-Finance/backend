@@ -1,5 +1,5 @@
 """
-Authentication module for Kashi Finances Backend.
+Authentication and authorization utilities.
 
-Contains Supabase Auth token verification and user_id extraction logic.
+Provides Supabase Auth token verification and user_id extraction.
 """

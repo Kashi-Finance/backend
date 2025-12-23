@@ -1,5 +1,12 @@
 #!/bin/bash
 # Kashi Finances Backend - Quick Start Script (pyenv-aware)
+# 
+# This script sets up a complete local development environment including:
+# - Python virtual environment
+# - Dependencies installation
+# - Supabase local stack (PostgreSQL + Auth + Storage)
+# - Database migrations
+# - Test verification
 
 set -e  # Exit on error
 
@@ -88,6 +95,34 @@ fi
 
 echo "✓ Dependencies installed"
 
+# Check Supabase CLI
+echo ""
+echo "🐘 Verifying Supabase CLI..."
+if ! command -v supabase &> /dev/null; then
+    echo "⚠️  Supabase CLI not found (optional, only needed for local DB)."
+    echo "   Install with: brew install supabase/tap/supabase"
+    echo "   Or download from: https://github.com/supabase/cli"
+else
+    echo "✓ Supabase CLI found: $(supabase --version)"
+    
+    # Check if supabase/ directory exists
+    if [ -d "supabase" ]; then
+        echo ""
+        echo "🗄️  Starting local Supabase stack (PostgreSQL + Auth + Storage)..."
+        if supabase start > /dev/null 2>&1; then
+            echo "✓ Supabase local services started"
+            # Display connection info
+            SUPABASE_LOCAL_URL=$(supabase status 2>/dev/null | grep "API URL" | awk '{print $NF}' || echo "http://localhost:54321")
+            echo "   API URL: $SUPABASE_LOCAL_URL"
+        else
+            echo "⚠️  Supabase may already be running or encountered an error"
+        fi
+    else
+        echo "⚠️  supabase/ directory not found. To set up Supabase migrations:"
+        echo "   supabase init"
+    fi
+fi
+
 # Verify installation
 echo ""
 echo "🧪 Verifying FastAPI app can be imported..."
@@ -96,13 +131,65 @@ if ! python -c "from backend.main import app; print('✓ FastAPI app loaded succ
     exit 1
 fi
 
+# Run tests
+echo ""
+echo "🧪 Running test suite..."
+if command -v pytest &> /dev/null; then
+    if python -m pytest tests/ -v --tb=short; then
+        echo "✅ All tests passed!"
+    else
+        echo "⚠️  Some tests failed. Review output above."
+    fi
+else
+    echo "ℹ️  pytest not found. To run tests manually: python -m pytest tests/ -v"
+fi
+
 echo ""
 echo "✅ Setup complete!"
 echo ""
-echo "Next steps:"
-echo "  1. Activate virtual environment: source venv/bin/activate" 
-echo "  2. Start dev server: uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000"
-echo "  3. Visit http://localhost:8000/health"
-echo "  4. View API docs at http://localhost:8000/docs"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "📋 Next Steps:"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "📖 See README.md and BOOTSTRAP_COMPLETE.md for more information"
+echo "1️⃣  Activate virtual environment (if not already active):"
+echo "   source venv/bin/activate"
+echo ""
+echo "2️⃣  Start the development server:"
+echo "   uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000"
+echo ""
+echo "3️⃣  View API documentation:"
+echo "   • OpenAPI/Swagger: http://localhost:8000/docs"
+echo "   • ReDoc: http://localhost:8000/redoc"
+echo "   • Health check: http://localhost:8000/health"
+echo ""
+echo "4️⃣  Example API calls (after server starts):"
+echo ""
+echo "   📝 Create a normal transfer (between user's own accounts):"
+echo "   curl -X POST http://localhost:8000/transfers \\"
+echo '     -H "Authorization: Bearer <TOKEN>" \\'
+echo '     -H "Content-Type: application/json" \\'
+echo '     -d {"from_account_id":"<ACCOUNT_A>","to_account_id":"<ACCOUNT_B>",...}'
+echo ""
+echo "   � Create a recurring transfer (monthly example):"
+echo "   curl -X POST http://localhost:8000/transfers/recurring \\"
+echo '     -H "Authorization: Bearer <TOKEN>" \\'
+echo '     -H "Content-Type: application/json" \\'
+echo '     -d {"from_account_id":"<ACCOUNT_A>","to_account_id":"<ACCOUNT_B>","frequency":"monthly",...}'
+echo ""
+echo "5️⃣  Run tests anytime:"
+echo "   python -m pytest tests/ -v              # Run all tests"
+echo "   python -m pytest tests/test_transfers.py -v  # Test transfer system only"
+echo "   python -m pytest tests/ -k transfer --tb=short  # Filter tests"
+echo ""
+echo "6️⃣  Watch for recurring transaction syncing:"
+echo "   • Check logs for: 'Syncing recurring transactions for user'"
+echo "   • Backend automatically creates new transactions from recurring rules"
+echo "   • Verify in logs or by querying /transactions endpoint"
+echo ""
+echo "📖 Documentation:"
+echo "   • API Endpoints: See API-endpoints.md"
+echo "   • Architecture: See kashi-agents-architecture.md"
+echo "   • Transfer System: See recommendation-agent-specs.md"
+echo "   • README: See README.md for full project guide"
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

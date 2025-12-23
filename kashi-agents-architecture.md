@@ -17,149 +17,188 @@ The system is designed to maintain **clarity of responsibility**:
 | Layer | Description | Key Technologies |
 |-------|--------------|------------------|
 | **Frontend (Flutter + Riverpod)** | Mobile application providing user interface, state management, and connection to backend endpoints. | Flutter, Dart |
-| **Backend API (FastAPI + ADK)** | RESTful API deployed on Cloud Run. Orchestrates agent calls, handles authentication, and manages persistence. | FastAPI, Python, Google ADK |
+| **Backend API (FastAPI)** | RESTful API deployed on Cloud Run. Orchestrates agent calls, handles authentication, and manages persistence. | FastAPI, Python |
 | **Database & Storage** | Central data layer with relational structure and vector search for semantic AI operations. | Supabase (PostgreSQL + pgvector, Storage, Auth) |
-| **Agents** | Modular AI components that execute specialized tasks such as OCR, product recommendation, and insight generation. | Google ADK, Gemini API |
+| **AI Components** | LLM-powered workflows for OCR and recommendations using optimized architectures. | Gemini API, DeepSeek V3.2 |
 
 ---
 
 ## ⚙️ Agent Ecosystem
 
-### 1. **InvoiceAgent**
-Automates OCR and structured extraction from receipts or invoices.
+### 1. **InvoiceAgent** (Single-Shot Multimodal Workflow)
 
-- **Purpose:** Convert image → structured JSON → confirmed transaction.  
-- **Status flow:**  
-  - `INVALID_IMAGE`: unreadable or non-invoice image.  
-  - `DRAFT`: valid extraction, pending user confirmation.  
-- **Outputs:** store name, purchase date, total amount, suggested category.  
-- **Persistence:** Data is stored only after human confirmation through `/invoices/commit`.  
-- **Tables affected:** `invoice`, `transaction`.  
-- **Frontend role:** Acts as human validation layer; never stores data automatically.
+Automates OCR and structured extraction from receipt/invoice images using a single-shot multimodal workflow.
 
----
+- **Purpose:** Convert an image into a strict, validated JSON extraction that the frontend shows to the user for confirmation. The agent is responsible only for extraction and structured suggestions — it never persists data.
 
-### 2. **RecommendationCoordinatorAgent**
-Central orchestrator for all recommendation tasks.
+- **Implementation:**
+  - Single-shot LLM workflow (one prompt → one Gemini call)
+  - This is a deterministic multimodal extraction step
+  - Uses Gemini's native vision capabilities to read images (base64 input required)
+  - Deterministic extraction: `temperature = 0.0` and `response_mime_type="application/json"`
+  - The backend fetches user context (profile + categories) before calling the agent
 
-- **Purpose:** Interpret user intent and route to appropriate subagents.
-- **Flow control:**  
-  1. Validates and sanitizes query (`query_raw`, `budget_hint`).  
-  2. Rejects illegal or irrelevant intents.  
-  3. Routes valid requests to `SearchAgent` → `FormatterAgent`.  
-- **Possible statuses:**  
-  - `NEEDS_CLARIFICATION` – asks user for missing details.  
-  - `OK` – returns structured product options.  
-  - `NO_VALID_OPTION` – no reliable result found.  
-- **Endpoint:** `/recommendations/query`.
+- **Expected Statuses:**
+  - `DRAFT`: Successful extraction with `store_name`, `transaction_time`, `total_amount`, `currency`, `items[]` and `category_suggestion`
+  - `INVALID_IMAGE`: Cannot extract reliable data (too blurry, not a receipt, etc.)
+  - `OUT_OF_SCOPE`: Request outside the invoice/extraction domain
 
----
+- **Category Suggestion Shape** (always present in DRAFT):
+  - `match_type`: `EXISTING` | `NEW_PROPOSED`
+  - `category_id`: UUID | null
+  - `category_name`: string | null
+  - `proposed_name`: string | null
 
-### 3. **SearchAgent**
-Executes product searches or goal lookups according to user context.
-
-- **Input:** validated query from the coordinator plus user metadata.  
-- **Tasks:**  
-  - Convert natural language into technical search filters.  
-  - Query product APIs or embeddings.  
-  - Return up to 3 verified results.
+- **Behavioral Rules:**
+  - The agent must NOT write to the database or call external tools
+  - The agent must NOT invent category IDs or persist images
+  - All persistence is done by the backend after user confirmation
+  - Committed invoices are immutable after `/invoices/commit`
 
 ---
 
-### 4. **FormatterAgent**
-Finalizes results for user display.
+### 2. **Recommendation System** (Prompt Chaining Architecture)
 
-- **Responsibilities:**  
-  - Validate and clean raw data from `SearchAgent`.  
-  - Match results to user preferences (`user_note`, `preferred_store`).  
-  - Generate natural copy (`copy_for_user`) and badges.  
-- **Output example:**
+> **Architecture Note (November 2025):** The recommendation system was refactored from a multi-agent ADK architecture (RecommendationCoordinatorAgent → SearchAgent → FormatterAgent) to a simplified **Prompt Chaining** approach using DeepSeek V3.2.
+
+- **Purpose:** Provide personalized product recommendations based on user's purchase goals, budget constraints, and preferences.
+
+- **Implementation:**
+  - **Pattern:** Prompt Chaining (single LLM call)
+  - **Model:** DeepSeek V3.2 (`deepseek-chat`)
+  - **API:** OpenAI-compatible
+  - **Temperature:** 0.0 (deterministic)
+  - **Output:** Structured JSON (forced via `response_format`)
+
+- **Architecture Flow:**
+  ```
+  User Query → FastAPI Endpoint → recommendation_service.py → DeepSeek API → JSON Response → Pydantic Model
+  ```
+
+- **Cost Comparison:**
+  | Metric | Previous (ADK) | Current (Prompt Chaining) |
+  |--------|----------------|---------------------------|
+  | LLM Calls per Request | 3 (Coordinator + Search + Formatter) | 1 |
+  | Monthly Cost (1M requests) | ~$1,500 | ~$300 |
+  | Response Time | 15-25 seconds | 5-10 seconds |
+  | Failure Points | 3 (cascading) | 1 |
+
+- **System Prompt Responsibilities:**
+  1. Intent validation (guardrails for prohibited content)
+  2. Query intent extraction
+  3. Product search logic (using model's knowledge)
+  4. Result validation & filtering
+  5. Output formatting rules
+  6. Graceful degradation
+
+- **Possible Statuses:**
+  - `OK`: Returns 1-3 structured product recommendations
+  - `NO_VALID_OPTION`: No suitable products found or out-of-scope request
+  - `NEEDS_CLARIFICATION`: *Deprecated in Prompt Chaining* (single-shot can't ask follow-up)
+
+- **API Endpoints:**
+  - `POST /recommendations/query`: Initial recommendation query
+  - `POST /recommendations/retry`: Retry with updated criteria
+
+- **Response Schema (OK status):**
   ```json
   {
     "status": "OK",
-    "results_for_user": [
+    "products": [
       {
-        "product_title": "ASUS Vivobook Ryzen 7 16GB",
-        "price_total": 6750,
+        "product_title": "ASUS Vivobook 15 Ryzen 7 16GB 512GB SSD",
+        "price_total": 6750.00,
         "seller_name": "TecnoMundo Guatemala",
-        "copy_for_user": "Ideal for Photoshop and design. No RGB lights.",
-        "badges": ["Good performance", "Discrete design", "Dedicated GPU"]
+        "url": "https://tecnomundo.com.gt/asus-vivobook15-ryzen7",
+        "pickup_available": true,
+        "warranty_info": "Garantía 12 meses tienda",
+        "copy_for_user": "Ideal para Photoshop y diseño gráfico. Cumple con GPU dedicada y diseño sobrio sin luces gamer.",
+        "badges": ["Buen rendimiento", "Diseño sobrio", "GPU dedicada"]
       }
-    ]
+    ],
+    "metadata": {
+      "total_results": 1,
+      "query_understood": true,
+      "search_successful": true
+    }
   }
   ```
 
----
-
-### 5. **Auxiliary & Future Agents**
-| Agent | Description |
-|--------|--------------|
-| **getUserCountry Tool** | Returns country from user profile or defaults to `GT`. Enables localized recommendations. |
-| **InsightAgent** | (Planned) Analyzes user habits for spending trends. |
-| **PriceTrackerAgent** | (Planned) Monitors price fluctuations for saved items. |
-| **BudgetAdvisor** | (Planned) Suggests budget adjustments aligned with user goals. |
+- **Integration with Wishlists:**
+  - Recommendation response → Frontend display → User selection → `POST /wishlists` with `selected_items`
+  - Field mapping: `ProductRecommendation` schema matches `WishlistItemFromRecommendation`
 
 ---
 
-## 🔁 Agent Communication
+### 3. **Future Agents** (Planned)
 
-### Interaction Model
-- **A2A (Agent-to-Agent)** communication follows an *orchestrated pattern*:
-  ```
-  Frontend → Coordinator → Search → Formatter → Coordinator → Frontend
-  ```
-- **Data contracts** between layers are strictly typed (JSON schemas).
-- **Frontend never interprets AI logic**; it only renders structured data.
+| Agent | Description | Status |
+|-------|-------------|--------|
+| **InsightAgent** | Analyzes user habits for spending trends | Planned |
+| **PriceTrackerAgent** | Monitors price fluctuations for saved items | Planned |
+| **BudgetAdvisor** | Suggests budget adjustments aligned with user goals | Planned |
 
 ---
 
 ## 🗄️ Data Persistence & Context
 
 ### Database Overview
-- **auth.users / profile:** authentication and user preferences.  
-- **invoice / transaction:** financial records from confirmed OCR data.  
-- **budget / recurring_transaction / wishlist_item:** dynamic goals, recurring events, and saved recommendations.  
-- **category:** predefined + user-created categories (system keys protected).  
-- **pgvector:** enables semantic similarity for search and recommendations.
+- **auth.users / user_profile:** Authentication and user preferences (country, currency)
+- **invoice / transaction:** Financial records from confirmed OCR data
+- **budget / recurring_transaction / wishlist_item:** Dynamic goals, recurring events, and saved recommendations
+- **category:** Predefined + user-created categories (system keys protected)
+- **pgvector:** Enables semantic similarity for future search features
 
-### Context Sharing
-Each agent can call helper tools (e.g., `getUserCountry`, `getUserCategories`) using user_id as a secure key, ensuring consistent contextual awareness across agents.
+### Context Fetching Pattern
+Both the InvoiceAgent and Recommendation System follow the same context pattern:
+1. FastAPI endpoint authenticates user via Supabase Auth
+2. Endpoint fetches user profile (country, currency_preference)
+3. Context is passed to the LLM workflow in the prompt
+4. Agent/workflow returns structured output (never writes to DB)
+5. Endpoint maps output to Pydantic models and returns response
 
 ---
 
 ## 🔒 Security & Integrity
-- **Authentication:** Supabase Auth; every API call includes a valid user token.  
-- **RLS Policies:** Row-level security enforced in Supabase (user_id-scoped).  
-- **Data Confirmation:** No record is stored without explicit user approval.  
-- **Isolation:** Each agent runs within its own container and scope, preventing data leakage between subsystems.
+
+- **Authentication:** Supabase Auth; every API call requires a valid JWT token
+- **RLS Policies:** Row-level security enforced in Supabase (`user_id = auth.uid()`)
+- **Data Confirmation:** No record is stored without explicit user approval
+- **Context Isolation:** LLM workflows receive only the minimum context needed
 
 ---
 
 ## 🌐 Deployment
+
 | Component | Platform | Deployment Method |
-|------------|-----------|-------------------|
-| Agents | Google Cloud Run | Containerized (Docker) |
-| API Backend | Cloud Run | FastAPI REST endpoints |
+|-----------|----------|-------------------|
+| Backend API | Google Cloud Run | Containerized (Docker) |
 | Database | Supabase Cloud | Managed PostgreSQL + pgvector |
-| OCR & AI | Google Gemini + ADK | External call integration |
+| Invoice OCR | Google Gemini API | Direct API calls |
+| Recommendations | DeepSeek API | OpenAI-compatible client |
 
 ---
 
 ## 🧹 Design Principles
-- **Single entry point per subsystem** (Coordinator/Orchestrator pattern).  
-- **Human-in-the-loop confirmation** for all financial data.  
-- **Strict contracts** between frontend ↔ backend ↔ agents.  
-- **Scalable modularity:** each agent can evolve independently.  
-- **Localization:** system adapts to user’s language, country, and currency preferences.
+
+- **Single LLM call per workflow:** Minimize latency and failure points
+- **Human-in-the-loop confirmation:** For all financial data
+- **Strict contracts:** Pydantic models for all request/response types
+- **Graceful degradation:** All errors return structured responses, never 500 errors
+- **Localization:** System adapts to user's language, country, and currency preferences
+- **Cost optimization:** Prefer efficient architectures (Prompt Chaining over multi-agent)
 
 ---
 
 ## 🚀 Summary
-The Kashi Finances agent ecosystem forms an intelligent, distributed platform capable of:
-- Automating expense recording via OCR.  
-- Offering verified, contextual product and financial recommendations.  
-- Managing budgets, goals, and insights with scalable cloud components.
+
+The Kashi Finances agent ecosystem forms an intelligent platform capable of:
+- Automating expense recording via OCR (InvoiceAgent)
+- Offering verified, contextual product recommendations (Prompt Chaining)
+- Managing budgets, goals, and insights with scalable cloud components
 
 This architecture ensures **accuracy, transparency, and user control**, aligning advanced AI workflows with real-world financial management.
 
 ---
+
+*Last Updated: November 2025*

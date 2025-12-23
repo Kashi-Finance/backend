@@ -1,0 +1,765 @@
+-- =========================================================
+-- Required Extensions
+-- =========================================================
+
+-- UUID generation support
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- Vector similarity search for semantic transaction search
+CREATE EXTENSION IF NOT EXISTS "vector";
+
+-- =========================================================
+-- Enums
+-- =========================================================
+
+-- Financial account types
+CREATE TYPE account_type_enum AS ENUM (
+  'cash',          -- Physical cash or wallet
+  'bank',          -- Checking or savings account
+  'credit_card',   -- Credit card account
+  'loan',          -- Loan account
+  'remittance',    -- Remittance/transfer account
+  'crypto',        -- Cryptocurrency wallet
+  'investment'     -- Investment/brokerage account
+);
+
+-- Transaction flow direction (income vs outcome)
+CREATE TYPE flow_type_enum AS ENUM (
+  'income',   -- Money coming in
+  'outcome'   -- Money going out
+);
+
+-- Budget recurrence frequency
+CREATE TYPE budget_frequency_enum AS ENUM (
+  'once',     -- One-time budget
+  'daily',    -- Repeats daily
+  'weekly',   -- Repeats weekly
+  'monthly',  -- Repeats monthly
+  'yearly'    -- Repeats yearly
+);
+
+-- Recurring transaction frequency
+CREATE TYPE recurring_frequency_enum AS ENUM (
+  'daily',    -- Repeats daily
+  'weekly',   -- Repeats weekly
+  'monthly',  -- Repeats monthly
+  'yearly'    -- Repeats yearly
+);
+
+-- Wishlist goal status
+CREATE TYPE wishlist_status_enum AS ENUM (
+  'active',      -- Goal is active
+  'purchased',   -- Goal has been achieved/purchased
+  'abandoned'    -- Goal has been abandoned
+);
+
+-- =========================================================
+-- Table: profile
+-- User profile and preferences (1:1 with auth.users)
+-- =========================================================
+
+CREATE TABLE public.profile (
+  user_id             uuid PRIMARY KEY
+                        REFERENCES auth.users(id) ON DELETE CASCADE,
+  first_name          text        NOT NULL,
+  last_name           text,
+  avatar_url          text,
+  currency_preference text        NOT NULL,  -- ISO currency code (e.g., 'GTQ', 'USD')
+  locale              text        NOT NULL DEFAULT 'system',
+  country             text        NOT NULL,  -- ISO-2 country code (e.g., 'GT', 'US')
+  -- Engagement / Streak fields
+  current_streak      integer     NOT NULL DEFAULT 0,  -- Current consecutive days with activity
+  longest_streak      integer     NOT NULL DEFAULT 0,  -- All-time longest streak
+  last_activity_date  date        NULL,                -- Last date of financial activity (for streak calculation)
+  streak_freeze_available boolean NOT NULL DEFAULT true,  -- One free freeze per week
+  streak_freeze_used_this_week boolean NOT NULL DEFAULT false,  -- Reset every Monday
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  updated_at          timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON COLUMN public.profile.current_streak IS 
+  'Current consecutive days with at least one financial activity (transaction or invoice). Reset to 0 if user misses a day without a streak freeze.';
+COMMENT ON COLUMN public.profile.longest_streak IS 
+  'All-time longest streak achieved. Updated when current_streak exceeds this value.';
+COMMENT ON COLUMN public.profile.last_activity_date IS 
+  'Last calendar date (UTC) when user logged a transaction or invoice. Used to calculate streak continuity.';
+COMMENT ON COLUMN public.profile.streak_freeze_available IS 
+  'Whether user can use a streak freeze this week. One free freeze per week, resets every Monday.';
+COMMENT ON COLUMN public.profile.streak_freeze_used_this_week IS 
+  'Whether user has used their streak freeze this week. Auto-triggers when streak would break but freeze is available.';
+
+-- =========================================================
+-- Table: account
+-- Financial accounts (bank accounts, cash, credit cards, etc.)
+-- Balance is cached for performance but recomputable from transactions
+-- =========================================================
+
+CREATE TABLE public.account (
+  id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id        uuid           NOT NULL
+                                REFERENCES auth.users(id) ON DELETE CASCADE,
+  name           text           NOT NULL,  -- User-friendly name
+  type           account_type_enum NOT NULL,
+  currency       text           NOT NULL,  -- ISO currency code
+  icon           text           NOT NULL,  -- Icon identifier (e.g., 'wallet', 'bank', 'credit_card')
+  color          text           NOT NULL,  -- Hex color code (e.g., '#FF5733')
+  is_favorite    boolean        NOT NULL DEFAULT false,  -- Auto-select for manual transactions (max 1 per user)
+  is_pinned      boolean        NOT NULL DEFAULT false,  -- Pin to top of account list
+  description    text           NULL,      -- Optional user description
+  cached_balance numeric(12,2)  NOT NULL DEFAULT 0,
+  deleted_at     timestamptz    NULL,
+  created_at     timestamptz    NOT NULL DEFAULT now(),
+  updated_at     timestamptz    NOT NULL DEFAULT now()
+);
+
+COMMENT ON COLUMN public.account.cached_balance IS 
+  'Performance cache recomputable from transaction rows. Use recompute_account_balance(account_id) to verify/correct.';
+COMMENT ON COLUMN public.account.deleted_at IS 
+  'Soft-delete timestamp. When set, account is hidden from users but retained for audit/recovery. Deletion is tracked via RLS user_id enforcement; admin actions should use audit logs.';
+COMMENT ON COLUMN public.account.icon IS 
+  'Icon identifier for UI display. Common values: wallet, bank, credit_card, loan, crypto, investment.';
+COMMENT ON COLUMN public.account.color IS 
+  'Hex color code for UI display (e.g., #FF5733). Must be valid 6-digit hex with leading #.';
+COMMENT ON COLUMN public.account.is_favorite IS 
+  'When true, this account is auto-selected when creating manual transactions. Only one account per user can be favorite. Use set_favorite_account RPC to safely toggle.';
+COMMENT ON COLUMN public.account.is_pinned IS 
+  'When true, this account appears at the top of account lists for quick access.';
+
+CREATE INDEX account_user_id_idx ON public.account (user_id);
+CREATE INDEX account_deleted_at_idx ON public.account (deleted_at) WHERE deleted_at IS NOT NULL;
+CREATE INDEX account_user_favorite_idx ON public.account (user_id, is_favorite) WHERE is_favorite = true;
+
+-- =========================================================
+-- Table: category
+-- Transaction categories (system categories + user-defined categories)
+-- System categories: user_id IS NULL, key IS NOT NULL
+-- User categories: user_id IS NOT NULL, key IS NULL
+-- =========================================================
+
+CREATE TABLE public.category (
+  id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id           uuid
+                      REFERENCES auth.users(id) ON DELETE CASCADE,
+  parent_category_id uuid
+                      REFERENCES public.category(id) ON DELETE CASCADE,
+  key               text,              -- Stable system key (only for system categories)
+  name              text        NOT NULL,
+  flow_type         flow_type_enum NOT NULL,
+  icon              text        NOT NULL,  -- Icon identifier (e.g., 'shopping', 'food', 'transport')
+  color             text        NOT NULL,  -- Hex color code (e.g., '#4CAF50')
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  updated_at        timestamptz NOT NULL DEFAULT now(),
+  
+  CONSTRAINT category_key_unique UNIQUE (key, flow_type),
+  CONSTRAINT category_scope_ck CHECK (
+    (user_id IS NULL AND key IS NOT NULL) OR
+    (user_id IS NOT NULL AND key IS NULL)
+  ),
+  -- Subcategories can only exist for user categories, not system categories
+  CONSTRAINT category_parent_ck CHECK (
+    parent_category_id IS NULL OR (user_id IS NOT NULL AND key IS NULL)
+  )
+);
+
+COMMENT ON TABLE public.category IS 
+  'Transaction categories. System categories (user_id NULL) are global and immutable. User categories are personal and editable. Subcategories supported via parent_category_id (max depth: 1).';
+COMMENT ON COLUMN public.category.key IS 
+  'Stable identifier for system categories (e.g., "transfer", "general"). NULL for user categories.';
+COMMENT ON COLUMN public.category.parent_category_id IS 
+  'Reference to parent category for subcategories. Only user categories can have parents. Max depth is 1 (parent -> child, no grandchildren). Parent must have same flow_type and user_id.';
+COMMENT ON COLUMN public.category.icon IS 
+  'Icon identifier for UI display. Common values: shopping, food, transport, entertainment, utilities, health, education.';
+COMMENT ON COLUMN public.category.color IS 
+  'Hex color code for UI display (e.g., #4CAF50). Must be valid 6-digit hex with leading #.';
+
+CREATE INDEX category_user_id_idx ON public.category (user_id) WHERE user_id IS NOT NULL;
+CREATE INDEX category_parent_id_idx ON public.category (parent_category_id) WHERE parent_category_id IS NOT NULL;
+
+-- =========================================================
+-- Table: invoice
+-- User-uploaded invoices/receipts with OCR text
+-- Storage path points to Supabase Storage location
+-- =========================================================
+
+CREATE TABLE public.invoice (
+  id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id        uuid        NOT NULL
+                              REFERENCES auth.users(id) ON DELETE CASCADE,
+  storage_path   text        NOT NULL,  -- Path in Supabase Storage
+  extracted_text text        NOT NULL,  -- OCR text for audit trail
+  deleted_at     timestamptz NULL,
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  updated_at     timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON COLUMN public.invoice.extracted_text IS 
+  'OCR-extracted text stored for audit and traceability. Format defined in API documentation.';
+COMMENT ON COLUMN public.invoice.deleted_at IS 
+  'Soft-delete timestamp. Storage file should be archived (not immediately deleted) when set. Deletion tracked via RLS user_id; admin actions use audit logs.';
+
+CREATE INDEX invoice_user_id_idx ON public.invoice (user_id);
+CREATE INDEX invoice_deleted_at_idx ON public.invoice (deleted_at) WHERE deleted_at IS NOT NULL;
+
+-- =========================================================
+-- Table: recurring_transaction
+-- Templates for generating recurring transactions automatically
+-- Supports paired templates for recurring transfers
+-- =========================================================
+
+CREATE TABLE public.recurring_transaction (
+  id                              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id                         uuid        NOT NULL
+                                            REFERENCES auth.users(id) ON DELETE CASCADE,
+  account_id                      uuid        NOT NULL
+                                            REFERENCES public.account(id) ON DELETE RESTRICT,
+  category_id                     uuid
+                                            REFERENCES public.category(id) ON DELETE SET NULL,
+  flow_type                       flow_type_enum NOT NULL,
+  amount                          numeric(12,2)  NOT NULL CHECK (amount >= 0),
+  description                     text        NOT NULL,
+  paired_recurring_transaction_id uuid
+                                            REFERENCES public.recurring_transaction(id) ON DELETE SET NULL,
+  frequency                       recurring_frequency_enum NOT NULL,
+  interval                        integer     NOT NULL DEFAULT 1 CHECK (interval >= 1),
+  by_weekday                      text[],     -- For weekly frequency: e.g., ["monday", "friday"]
+  by_monthday                     integer[],  -- For monthly frequency: e.g., [1, 15]
+  start_date                      date        NOT NULL,
+  next_run_date                   date        NOT NULL,
+  end_date                        date,
+  is_active                       boolean     NOT NULL DEFAULT true,
+  deleted_at                      timestamptz NULL,
+  created_at                      timestamptz NOT NULL DEFAULT now(),
+  updated_at                      timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE public.recurring_transaction IS 
+  'Templates for automatic transaction generation. When next_run_date arrives, backend creates transaction and advances next_run_date.';
+COMMENT ON COLUMN public.recurring_transaction.paired_recurring_transaction_id IS 
+  'Links two recurring templates (one outcome, one income) for recurring transfers. Both templates materialize as paired transactions.';
+COMMENT ON COLUMN public.recurring_transaction.deleted_at IS 
+  'Soft-delete timestamp. Stops future materialization without affecting already-created transactions. Deletion tracked via RLS user_id; admin actions use audit logs.';
+
+CREATE INDEX recurring_tx_user_active_idx ON public.recurring_transaction (user_id, is_active, next_run_date);
+CREATE INDEX recurring_tx_paired_idx ON public.recurring_transaction (paired_recurring_transaction_id) 
+  WHERE paired_recurring_transaction_id IS NOT NULL;
+CREATE INDEX recurring_tx_deleted_at_idx ON public.recurring_transaction (deleted_at) WHERE deleted_at IS NOT NULL;
+
+-- =========================================================
+-- Table: transaction
+-- Individual financial transactions (income or outcome)
+-- Can be manually created, generated from invoices, or materialized from recurring templates
+-- Balance is derived by summing transaction amounts (not stored in account table)
+-- =========================================================
+
+CREATE TABLE public.transaction (
+  id                        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id                   uuid        NOT NULL
+                                      REFERENCES auth.users(id) ON DELETE CASCADE,
+  account_id                uuid        NOT NULL
+                                      REFERENCES public.account(id) ON DELETE RESTRICT,
+  category_id               uuid        NOT NULL
+                                      REFERENCES public.category(id) ON DELETE RESTRICT,
+  invoice_id                uuid
+                                      REFERENCES public.invoice(id) ON DELETE SET NULL,
+  flow_type                 flow_type_enum NOT NULL,
+  amount                    numeric(12,2)  NOT NULL CHECK (amount >= 0),
+  date                      timestamptz    NOT NULL,  -- Effective date of transaction
+  description               text,
+  embedding                 vector(1536),  -- Semantic embedding for natural language search
+  paired_transaction_id     uuid
+                                      REFERENCES public.transaction(id) ON DELETE SET NULL,
+  recurring_transaction_id  uuid
+                                      REFERENCES public.recurring_transaction(id) ON DELETE SET NULL,
+  system_generated_key      text        NULL,
+  deleted_at                timestamptz NULL,
+  created_at                timestamptz NOT NULL DEFAULT now(),
+  updated_at                timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE public.transaction IS 
+  'Financial transactions. Account balance is computed by summing amounts (income positive, outcome negative).';
+COMMENT ON COLUMN public.transaction.paired_transaction_id IS 
+  'Links two transactions for internal transfers. One outcome (source account) and one income (destination account) reference each other.';
+COMMENT ON COLUMN public.transaction.recurring_transaction_id IS 
+  'Foreign key to recurring_transaction template that generated this transaction. NULL if manually created.';
+COMMENT ON COLUMN public.transaction.system_generated_key IS 
+  'Human-readable marker for system-created transactions (e.g., "recurring_rule_auto", "invoice_ocr", "bulk_import"). Used for UI decoration only.';
+COMMENT ON COLUMN public.transaction.deleted_at IS 
+  'Soft-delete timestamp. Hidden from users when set. Use recompute procedures for cache adjustments and hard-delete procedures for permanent removal.';
+COMMENT ON COLUMN public.transaction.embedding IS 
+  'Semantic vector embedding for natural language search. Dimension matches embedding model (currently 1536 for text-embedding-3-large).';
+
+-- Performance indexes for common queries
+CREATE INDEX transaction_user_date_idx ON public.transaction (user_id, date DESC);
+CREATE INDEX transaction_account_idx ON public.transaction (account_id, date DESC);
+CREATE INDEX transaction_category_idx ON public.transaction (category_id);
+CREATE INDEX transaction_recurring_idx ON public.transaction (recurring_transaction_id) 
+  WHERE recurring_transaction_id IS NOT NULL;
+CREATE INDEX transaction_paired_idx ON public.transaction (paired_transaction_id) 
+  WHERE paired_transaction_id IS NOT NULL;
+CREATE INDEX transaction_invoice_idx ON public.transaction (invoice_id) WHERE invoice_id IS NOT NULL;
+CREATE INDEX transaction_deleted_at_idx ON public.transaction (deleted_at) WHERE deleted_at IS NOT NULL;
+
+-- Semantic search vector index
+CREATE INDEX transaction_embedding_idx ON public.transaction 
+  USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+
+-- =========================================================
+-- Table: budget
+-- Spending limits that can be one-time or recurring
+-- Consumption is cached for performance but recomputable from transactions
+-- =========================================================
+
+CREATE TABLE public.budget (
+  id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name               text           NOT NULL,
+  user_id            uuid           NOT NULL
+                                    REFERENCES auth.users(id) ON DELETE CASCADE,
+  limit_amount       numeric(12,2)  NOT NULL CHECK (limit_amount > 0),
+  currency           text           NOT NULL,  -- ISO currency code (must match profile.currency_preference)
+  frequency          budget_frequency_enum NOT NULL,
+  interval           integer        NOT NULL DEFAULT 1 CHECK (interval >= 1),
+  start_date         date           NOT NULL,
+  end_date           date,  -- Optional hard end date for project budgets
+  is_active          boolean        NOT NULL DEFAULT true,
+  cached_consumption numeric(12,2)  NOT NULL DEFAULT 0,
+  deleted_at         timestamptz    NULL,
+  created_at         timestamptz    NOT NULL DEFAULT now(),
+  updated_at         timestamptz    NOT NULL DEFAULT now()
+);
+
+COMMENT ON COLUMN public.budget.currency IS 
+  'ISO currency code for this budget. Must match profile.currency_preference (single-currency-per-user policy).';
+COMMENT ON COLUMN public.budget.cached_consumption IS 
+  'Performance cache for current period consumption. Recomputable via recompute_budget_consumption(budget_id, period_start, period_end).';
+COMMENT ON COLUMN public.budget.interval IS 
+  'Repetition interval for recurring budgets (e.g., 1 = every period, 2 = every other period).';
+COMMENT ON COLUMN public.budget.deleted_at IS 
+  'Soft-delete timestamp. Budget stops applying when set but historical data is retained. Deletion tracked via RLS user_id; admin actions use audit logs.';
+
+CREATE INDEX budget_user_active_idx ON public.budget (user_id, is_active);
+CREATE INDEX budget_deleted_at_idx ON public.budget (deleted_at) WHERE deleted_at IS NOT NULL;
+
+-- =========================================================
+-- Table: budget_category
+-- N:M relationship between budgets and categories
+-- A budget can track spending across multiple categories
+-- =========================================================
+
+CREATE TABLE public.budget_category (
+  budget_id    uuid NOT NULL
+                     REFERENCES public.budget(id) ON DELETE CASCADE,
+  category_id  uuid NOT NULL
+                     REFERENCES public.category(id) ON DELETE CASCADE,
+  user_id      uuid NOT NULL
+                     REFERENCES auth.users(id) ON DELETE CASCADE,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  updated_at   timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (budget_id, category_id)
+);
+
+COMMENT ON TABLE public.budget_category IS 
+  'Links budgets to categories. Transactions in linked categories count toward budget consumption.';
+
+CREATE INDEX budget_category_user_idx ON public.budget_category (user_id);
+CREATE INDEX budget_category_category_idx ON public.budget_category (category_id);
+
+-- =========================================================
+-- Table: wishlist
+-- User purchase goals with budget and timeline
+-- Can exist without items (items are added when user saves recommendations)
+-- =========================================================
+
+CREATE TABLE public.wishlist (
+  id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id        uuid NOT NULL
+                   REFERENCES auth.users(id) ON DELETE CASCADE,
+  goal_title     text NOT NULL,
+  budget_hint    numeric(12,2) NOT NULL,
+  currency_code  text NOT NULL,
+  target_date    date NULL,
+  preferred_store text NULL,
+  user_note      text NULL,
+  status         wishlist_status_enum NOT NULL,
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  updated_at     timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX wishlist_user_id_idx ON public.wishlist (user_id);
+CREATE INDEX wishlist_user_status_idx ON public.wishlist (user_id, status);
+CREATE INDEX wishlist_created_at_idx ON public.wishlist (created_at DESC);
+
+-- =========================================================
+-- Table: wishlist_item
+-- Specific product recommendations saved by user
+-- Linked to a wishlist goal
+-- =========================================================
+
+CREATE TABLE public.wishlist_item (
+  id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  wishlist_id        uuid NOT NULL
+                       REFERENCES public.wishlist (id) ON DELETE CASCADE,
+  product_title      text NOT NULL,
+  price_total        numeric(12,2) NOT NULL,
+  seller_name        text NOT NULL,
+  url                text NOT NULL,
+  pickup_available   boolean NOT NULL DEFAULT false,
+  warranty_info      text NOT NULL,
+  copy_for_user      text NOT NULL,
+  badges             jsonb NOT NULL DEFAULT '[]'::jsonb,
+  created_at         timestamptz NOT NULL DEFAULT now(),
+  updated_at         timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE public.wishlist_item IS 
+  'Product recommendations saved by user. Only created when user explicitly saves an option from agent recommendations.';
+
+CREATE INDEX wishlist_item_wishlist_id_idx ON public.wishlist_item (wishlist_id);
+CREATE INDEX wishlist_item_join_idx ON public.wishlist_item (wishlist_id, created_at DESC);
+
+-- =========================================================
+-- Row-Level Security (RLS) Setup
+-- All user-owned tables enforce RLS to isolate user data
+-- service_role can bypass RLS for admin/maintenance operations
+-- =========================================================
+
+ALTER TABLE public.profile                  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.account                  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.category                 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.invoice                  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.transaction              ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.budget                   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.budget_category          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.recurring_transaction    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.wishlist                 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.wishlist_item            ENABLE ROW LEVEL SECURITY;
+
+-- =========================================================
+-- RLS Policies: profile
+-- Users can only access their own profile
+-- service_role can access all profiles
+-- =========================================================
+
+CREATE POLICY "profile_select_own" ON public.profile
+FOR SELECT USING (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "profile_insert_self_or_service" ON public.profile
+FOR INSERT WITH CHECK (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "profile_update_own" ON public.profile
+FOR UPDATE USING (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+) WITH CHECK (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "profile_delete_self_or_service" ON public.profile
+FOR DELETE USING (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+-- =========================================================
+-- RLS Policies: account
+-- Users can only see non-deleted accounts they own
+-- service_role can see all accounts (including soft-deleted)
+-- =========================================================
+
+CREATE POLICY "account_select_own" ON public.account
+FOR SELECT USING (
+  (user_id = auth.uid() AND deleted_at IS NULL) OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "account_insert_own" ON public.account
+FOR INSERT WITH CHECK (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "account_update_own" ON public.account
+FOR UPDATE USING (
+  (user_id = auth.uid() AND deleted_at IS NULL) OR auth.role() = 'service_role'
+) WITH CHECK (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "account_delete_own" ON public.account
+FOR DELETE USING (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+-- =========================================================
+-- RLS Policies: category
+-- Users can see their own categories AND global system categories
+-- Users can only modify their own categories (not system categories)
+-- service_role can modify everything
+-- =========================================================
+
+CREATE POLICY "category_select_allowed" ON public.category
+FOR SELECT USING (
+  user_id = auth.uid() OR user_id IS NULL OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "category_insert_personal" ON public.category
+FOR INSERT WITH CHECK (
+  (user_id = auth.uid() AND key IS NULL) OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "category_update_personal" ON public.category
+FOR UPDATE USING (
+  (user_id = auth.uid() AND key IS NULL) OR auth.role() = 'service_role'
+) WITH CHECK (
+  (user_id = auth.uid() AND key IS NULL) OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "category_delete_personal" ON public.category
+FOR DELETE USING (
+  (user_id = auth.uid() AND key IS NULL) OR auth.role() = 'service_role'
+);
+
+-- =========================================================
+-- RLS Policies: invoice
+-- Users can only see non-deleted invoices they own
+-- =========================================================
+
+CREATE POLICY "invoice_select_own" ON public.invoice
+FOR SELECT USING (
+  (user_id = auth.uid() AND deleted_at IS NULL) OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "invoice_insert_own" ON public.invoice
+FOR INSERT WITH CHECK (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "invoice_update_own" ON public.invoice
+FOR UPDATE USING (
+  (user_id = auth.uid() AND deleted_at IS NULL) OR auth.role() = 'service_role'
+) WITH CHECK (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "invoice_delete_own" ON public.invoice
+FOR DELETE USING (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+-- =========================================================
+-- RLS Policies: transaction
+-- Users can only see non-deleted transactions they own
+-- =========================================================
+
+CREATE POLICY "transaction_select_own" ON public.transaction
+FOR SELECT USING (
+  (user_id = auth.uid() AND deleted_at IS NULL) OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "transaction_insert_own" ON public.transaction
+FOR INSERT WITH CHECK (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "transaction_update_own" ON public.transaction
+FOR UPDATE USING (
+  (user_id = auth.uid() AND deleted_at IS NULL) OR auth.role() = 'service_role'
+) WITH CHECK (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "transaction_delete_own" ON public.transaction
+FOR DELETE USING (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+-- =========================================================
+-- RLS Policies: budget
+-- Users can only see non-deleted budgets they own
+-- =========================================================
+
+CREATE POLICY "budget_select_own" ON public.budget
+FOR SELECT USING (
+  (user_id = auth.uid() AND deleted_at IS NULL) OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "budget_insert_own" ON public.budget
+FOR INSERT WITH CHECK (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "budget_update_own" ON public.budget
+FOR UPDATE USING (
+  (user_id = auth.uid() AND deleted_at IS NULL) OR auth.role() = 'service_role'
+) WITH CHECK (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "budget_delete_own" ON public.budget
+FOR DELETE USING (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+-- =========================================================
+-- RLS Policies: budget_category
+-- Users can only manage budget-category links they own
+-- =========================================================
+
+CREATE POLICY "budget_category_select_own" ON public.budget_category
+FOR SELECT USING (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "budget_category_insert_own" ON public.budget_category
+FOR INSERT WITH CHECK (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "budget_category_update_own" ON public.budget_category
+FOR UPDATE USING (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+) WITH CHECK (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "budget_category_delete_own" ON public.budget_category
+FOR DELETE USING (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+-- =========================================================
+-- RLS Policies: recurring_transaction
+-- Users can only see non-deleted recurring transactions they own
+-- =========================================================
+
+CREATE POLICY "recurring_tx_select_own" ON public.recurring_transaction
+FOR SELECT USING (
+  (user_id = auth.uid() AND deleted_at IS NULL) OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "recurring_tx_insert_own" ON public.recurring_transaction
+FOR INSERT WITH CHECK (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "recurring_tx_update_own" ON public.recurring_transaction
+FOR UPDATE USING (
+  (user_id = auth.uid() AND deleted_at IS NULL) OR auth.role() = 'service_role'
+) WITH CHECK (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "recurring_tx_delete_own" ON public.recurring_transaction
+FOR DELETE USING (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+-- =========================================================
+-- RLS Policies: wishlist
+-- Users can only see wishlists they own
+-- =========================================================
+
+CREATE POLICY "wishlist_select_own_or_service" ON public.wishlist
+FOR SELECT USING (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "wishlist_insert_self_or_service" ON public.wishlist
+FOR INSERT WITH CHECK (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "wishlist_update_own_or_service" ON public.wishlist
+FOR UPDATE USING (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+) WITH CHECK (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+CREATE POLICY "wishlist_delete_own_or_service" ON public.wishlist
+FOR DELETE USING (
+  user_id = auth.uid() OR auth.role() = 'service_role'
+);
+
+-- =========================================================
+-- RLS Policies: wishlist_item
+-- Users can only see items in wishlists they own
+-- =========================================================
+
+CREATE POLICY "wishlist_item_select_own_or_service" ON public.wishlist_item
+FOR SELECT USING (
+  EXISTS (
+    SELECT 1 FROM public.wishlist w
+    WHERE w.id = wishlist_item.wishlist_id
+      AND (w.user_id = auth.uid() OR auth.role() = 'service_role')
+  )
+);
+
+CREATE POLICY "wishlist_item_insert_self_or_service" ON public.wishlist_item
+FOR INSERT WITH CHECK (
+  EXISTS (
+    SELECT 1 FROM public.wishlist w
+    WHERE w.id = wishlist_item.wishlist_id
+      AND (w.user_id = auth.uid() OR auth.role() = 'service_role')
+  )
+);
+
+CREATE POLICY "wishlist_item_update_own_or_service" ON public.wishlist_item
+FOR UPDATE USING (
+  EXISTS (
+    SELECT 1 FROM public.wishlist w
+    WHERE w.id = wishlist_item.wishlist_id
+      AND (w.user_id = auth.uid() OR auth.role() = 'service_role')
+  )
+) WITH CHECK (
+  EXISTS (
+    SELECT 1 FROM public.wishlist w
+    WHERE w.id = wishlist_item.wishlist_id
+      AND (w.user_id = auth.uid() OR auth.role() = 'service_role')
+  )
+);
+
+CREATE POLICY "wishlist_item_delete_own_or_service" ON public.wishlist_item
+FOR DELETE USING (
+  EXISTS (
+    SELECT 1 FROM public.wishlist w
+    WHERE w.id = wishlist_item.wishlist_id
+      AND (w.user_id = auth.uid() OR auth.role() = 'service_role')
+  )
+);
+
+-- =========================================================
+-- Single-Currency-Per-User Policy
+-- 
+-- Architecture Decision:
+-- - profile.currency_preference is the source of truth
+-- - All account.currency MUST match profile.currency_preference
+-- - All wishlist.currency_code MUST match profile.currency_preference
+-- - All budget.currency MUST match profile.currency_preference
+-- - Validation is enforced at service layer via RPC functions
+-- =========================================================
+
+-- =========================================================
+-- RPC Functions
+-- 
+-- All RPC functions are maintained in the migration file:
+-- supabase/migrations/20251201000001_all_rpc_functions.sql
+-- 
+-- This includes:
+-- - Account Management RPCs (delete_account_reassign, delete_account_cascade)
+-- - Transaction Management RPCs
+-- - Transfer RPCs
+-- - Recurring Transaction RPCs
+-- - Category Management RPCs
+-- - Wishlist RPCs
+-- - Cache Recomputation RPCs
+-- - Currency Validation RPCs
+-- - Favorite Account RPCs
+-- - Engagement / Streak RPCs (update_user_streak, get_user_streak, reset_weekly_streak_freezes)
+-- 
+-- DO NOT add RPC functions to this file. Use the migration file instead.
+-- =========================================================
+
+-- =========================================================
+-- End of DDL
+-- =========================================================

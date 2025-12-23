@@ -1,0 +1,201 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Cancel in-progress deployments when a new one is triggered
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false  # Don't cancel production deployments!
+
+jobs:
+  # Wait for CI to pass before deploying
+  wait-for-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Wait for CI workflow to complete
+        uses: lewagon/wait-on-check-action@v1.3.4
+        with:
+          ref: ${{ github.sha }}
+          check-name: 'lint-and-test'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10
+          allowed-conclusions: success
+
+      - name: CI passed - proceeding with deployment
+        run: echo "✅ CI tests passed, proceeding with production deployment"
+
+  deploy-production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: wait-for-ci  # Only deploy after CI passes
+
+    environment:
+      name: production
+      url: ${{ steps.get-url.outputs.SERVICE_URL }}
+
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.PRODUCTION_DB_PASSWORD }}
+      SUPABASE_PROJECT_ID: ${{ secrets.PRODUCTION_PROJECT_ID }}
+      GCP_PROJECT_ID: ${{ secrets.PRODUCTION_GCP_PROJECT_ID }}
+      GCP_REGION: ${{ secrets.GCP_REGION || 'us-central1' }}
+      CLOUD_RUN_SERVICE: kashi-backend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Safety check - Verify PR merge
+        run: |
+          echo "🔍 Last commit message:"
+          git log -1 --pretty=%B
+          
+          # Verify this is a merge commit (recommended pattern for production)
+          if ! git log -1 --pretty=%s | grep -Eqi "(merge pull request|merge branch)"; then
+            echo "⚠️  Warning: This doesn't appear to be a PR merge commit."
+            echo "Production deployments should come from merged PRs."
+            # NOTE: CI tests already passed (wait-for-ci job verified this)
+            # This is just an additional warning for manual discipline
+          fi
+          echo "✅ Commit verified"
+
+      # NOTE: Tests already ran in CI workflow (wait-for-ci job verified they passed)
+      # No need to run tests again here - this saves ~2-3 minutes per deployment
+
+      # ============================================================================
+      # Supabase Migrations
+      # ============================================================================
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Authenticate Supabase CLI
+        run: supabase login --token "$SUPABASE_ACCESS_TOKEN"
+
+      - name: Link to Supabase Production project
+        run: supabase link --project-ref $SUPABASE_PROJECT_ID --password $SUPABASE_DB_PASSWORD
+
+      - name: Push DB migrations to Production
+        run: |
+          echo "📦 Applying migrations to production Supabase project..."
+          supabase db push --password $SUPABASE_DB_PASSWORD
+          echo "✅ Migrations applied successfully"
+
+      # ============================================================================
+      # Google Cloud Run Deployment
+      # ============================================================================
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.PRODUCTION_GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev
+
+      - name: Build and push Docker image
+        run: |
+          IMAGE_NAME="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/kashi/backend:${{ github.sha }}"
+          IMAGE_LATEST="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/kashi/backend:latest"
+          IMAGE_PROD="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/kashi/backend:production"
+          
+          docker build -t $IMAGE_NAME -t $IMAGE_LATEST -t $IMAGE_PROD .
+          docker push $IMAGE_NAME
+          docker push $IMAGE_LATEST
+          docker push $IMAGE_PROD
+          
+          echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
+
+      - name: Deploy to Cloud Run (Production)
+        run: |
+          gcloud run deploy ${{ env.CLOUD_RUN_SERVICE }} \
+            --image ${{ env.IMAGE_NAME }} \
+            --platform managed \
+            --region ${{ env.GCP_REGION }} \
+            --allow-unauthenticated \
+            --memory 1Gi \
+            --cpu 2 \
+            --min-instances 0 \
+            --max-instances 100 \
+            --timeout 300 \
+            --set-env-vars "ENVIRONMENT=production" \
+            --set-env-vars "LOG_LEVEL=warning" \
+            --set-env-vars "SUPABASE_URL=${{ secrets.PRODUCTION_SUPABASE_URL }}" \
+            --set-env-vars "SUPABASE_PUBLISHABLE_KEY=${{ secrets.PRODUCTION_SUPABASE_PUBLISHABLE_KEY }}" \
+            --set-env-vars "SUPABASE_STORAGE_BUCKET=${{ secrets.SUPABASE_STORAGE_BUCKET || 'invoices' }}" \
+            --set-env-vars "CORS_ORIGINS=${{ secrets.PRODUCTION_CORS_ORIGINS }}" \
+            --set-secrets "GOOGLE_API_KEY=${{ secrets.PRODUCTION_GOOGLE_API_KEY_SECRET }}:latest" \
+            --service-account ${{ secrets.PRODUCTION_SERVICE_ACCOUNT }} \
+            --no-traffic  # Deploy without traffic first (manual traffic split later)
+
+      - name: Route 10% traffic to new revision (canary deployment)
+        run: |
+          # Get the new revision name
+          NEW_REVISION=$(gcloud run revisions list \
+            --service ${{ env.CLOUD_RUN_SERVICE }} \
+            --region ${{ env.GCP_REGION }} \
+            --format 'value(name)' \
+            --limit 1)
+          
+          echo "🚦 Routing 10% traffic to new revision: $NEW_REVISION"
+          
+          gcloud run services update-traffic ${{ env.CLOUD_RUN_SERVICE }} \
+            --region ${{ env.GCP_REGION }} \
+            --to-revisions $NEW_REVISION=10
+
+      - name: Get Cloud Run service URL
+        id: get-url
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${{ env.CLOUD_RUN_SERVICE }} \
+            --region ${{ env.GCP_REGION }} \
+            --format 'value(status.url)')
+          echo "🚀 Production deployed to: $SERVICE_URL"
+          echo "SERVICE_URL=$SERVICE_URL" >> $GITHUB_ENV
+          echo "SERVICE_URL=$SERVICE_URL" >> $GITHUB_OUTPUT
+
+      - name: Test deployed service health
+        run: |
+          # Wait for service to be ready
+          sleep 15
+          
+          # Test health endpoint
+          curl -f ${{ env.SERVICE_URL }}/health || {
+            echo "❌ Health check failed"
+            echo "⚠️  Rolling back traffic..."
+            gcloud run services update-traffic ${{ env.CLOUD_RUN_SERVICE }} \
+              --region ${{ env.GCP_REGION }} \
+              --to-latest
+            exit 1
+          }
+          
+          echo "✅ Production deployment healthy (10% traffic)"
+          echo ""
+          echo "⚠️  NEXT STEP: Monitor metrics and manually route 100% traffic:"
+          echo "gcloud run services update-traffic ${{ env.CLOUD_RUN_SERVICE }} \\"
+          echo "  --region ${{ env.GCP_REGION }} \\"
+          echo "  --to-latest"
+
+      - name: Deployment summary
+        run: |
+          echo "## 🎉 Production Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Service**: ${{ env.CLOUD_RUN_SERVICE }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **URL**: ${{ env.SERVICE_URL }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Traffic**: 10% (canary deployment)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️  **Action Required**: Monitor metrics and route 100% traffic manually" >> $GITHUB_STEP_SUMMARY

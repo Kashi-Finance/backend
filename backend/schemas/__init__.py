@@ -1,6 +1,6 @@
 """
-Pydantic schema models for Kashi Finances Backend.
+Pydantic schemas for API request and response validation.
 
-Contains all RequestModel and ResponseModel classes for API endpoints.
-Each schema MUST use strict types (no Any) and explicit field definitions.
+All FastAPI endpoints MUST use strict Pydantic models with explicit types.
+No `Any` types allowed unless explicitly approved.
 """

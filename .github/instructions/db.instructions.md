@@ -7,6 +7,31 @@ This file is the ONLY place where database behavior, table structures, queries, 
 
 Application code MUST treat this file as the source of truth. Do not invent schemas or SQL in other files.
 
+Always refer to DB-DDL.txt for exact table definitions and RLS policies.
+
+## Documentation Structure (Progressive Disclosure)
+
+The database documentation follows Anthropic's progressive disclosure pattern:
+
+```
+DB-documentation.md           ← Concise index - START HERE
+└── docs/db/
+    ├── README.md             ← Navigation guide
+    ├── tables.md             ← Full table schemas
+    ├── rls.md                ← Row-Level Security policies
+    ├── enums.md              ← PostgreSQL enum definitions
+    ├── indexes.md            ← Index definitions and strategy
+    ├── soft-delete.md        ← Soft-delete patterns
+    ├── cached-values.md      ← Cached balance/consumption
+    ├── semantic-search.md    ← pgvector embeddings
+    └── system-data.md        ← System categories and keys
+```
+
+**How to navigate:**
+1. Start with `DB-documentation.md` for overview and quick reference
+2. Load `docs/db/<topic>.md` only when you need full details
+3. For table schemas, use `docs/db/tables.md`
+4. For RLS policies, use `docs/db/rls.md`
 
 ## 1. Ownership
 
@@ -33,7 +58,6 @@ When inserting or updating a record in the `invoice` table, the `extracted_text`
     Currency: {currency}
     Purchased Items:
     {purchased_items}
-    Receipt Image ID: {receipt_id}
     """
 
 Where:
@@ -42,7 +66,6 @@ Where:
 - `total_amount`: numeric rendered as string (e.g. "123.45").
 - `currency`: currency code / symbol (e.g. "GTQ").
 - `purchased_items`: multi-line list of the items with quantity and price.
-- `receipt_id`: internal reference to the stored receipt image.
 
 Any service that prepares an insert into `invoice` MUST normalize text to this exact template before persistence. This ensures a consistent snapshot for audit and review.
 
@@ -50,14 +73,10 @@ The logic to actually INSERT this data and link it to `user_id` lives here in db
 External layers (FastAPI endpoints, agents) MUST NOT directly craft SQL outside these rules.
 
 
-## 3. Embeddings Strategy (for semantic search and recommendations)
+## 3. Embeddings Strategy (for semantic search)
 
 We will maintain vector embeddings for semantically searchable content such as:
-- wishlist goals,
-- product descriptions,
-- normalized invoice vendor names,
-- category / budget hints,
-- user preference notes.
+- **Transactions:** generated from `invoice.extracted_text` (when available) combined with transaction attributes (`description`, `amount`, `category_name`, `date`)
 
 Recommended embedding model:
 - `text-embedding-3-small` by OpenAI.
@@ -65,6 +84,32 @@ Recommended embedding model:
   - Typical cost is on the order of $0.02 USD per 1M tokens of input, which is significantly cheaper (around 5x cheaper) than older embedding models while still improving multilingual retrieval quality. :contentReference[oaicite:2]{index=2} :contentReference[oaicite:3]{index=3} :contentReference[oaicite:4]{index=4}
   - It supports up to ~1536 dimensions by default and can be configured downwards (shorter vectors) using the model's `dimensions` parameter in some deployments, which lets us trade accuracy for storage cost. :contentReference[oaicite:5]{index=5} :contentReference[oaicite:6]{index=6}
   - This is appropriate for storing vectors in pgvector / Supabase and doing semantic search over user goals, preferred products, etc., with a good balance between accuracy and cost. :contentReference[oaicite:7]{index=7} :contentReference[oaicite:8]{index=8}
+
+### Transaction Embeddings (Specific Rules)
+
+For `transaction.embedding`, the vector MUST be generated from:
+
+1. **If the transaction was created from an invoice (`invoice_id` is not NULL):**
+   - Fetch the associated `invoice.extracted_text` (contains store name, items, total, transaction time)
+   - Combine it with transaction data: `description`, `amount`, `category_name`, `date`
+   - Generate embedding from the combined text using `text-embedding-3-small`
+
+2. **If the transaction was manually created (`invoice_id` is NULL):**
+   - Generate embedding from transaction attributes only: `description`, `amount`, `category_name`, `date`
+
+This ensures:
+- Invoice-based transactions benefit from rich OCR context (vendor, itemized products)
+- Manual transactions still have meaningful semantic vectors
+- Semantic search works uniformly across both types
+
+Example input text for embedding generation:
+```
+# Invoice-based transaction:
+"Store: Super Despensa Familiar, Items: Milk 2L Q15.00, Bread Q8.50, Total: Q128.50, Date: 2025-10-30, Category: Groceries, Description: Weekly shopping"
+
+# Manual transaction:
+"Amount: Q450.00, Date: 2025-10-28, Category: Utilities, Description: Monthly electricity bill"
+```
 
 Operational notes:
 - All embeddings MUST be stored in a dedicated vector column (e.g. `vector(1536)` using pgvector or its equivalent in Supabase).
@@ -74,6 +119,7 @@ Operational notes:
 Do NOT inline the exact table / column definitions here until the persistence team finalizes them. The final schema (table names, column names, indexes, and RLS policies) will be added to this file when approved.
 
 Until then, other parts of the code SHOULD NOT guess table names, column names, or pgvector usage details. They should only add comments such as:
+    # TODO(db-team): generate embedding for transaction using text-embedding-3-small (from invoice.extracted_text + transaction data)
     # TODO(db-team): upsert embedding for wishlist_item.description using text-embedding-3-small
 
 

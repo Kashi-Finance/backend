@@ -37,10 +37,10 @@ You MUST obey ALL rules below. Do not introduce new agents unless explicitly aut
      It must return:
 
      * store_name
-     * purchase_datetime
+     * transaction_time
      * total_amount
      * currency
-     * items[] (description, quantity, unit_price / total_price)
+     * purchased_items[] (description, quantity, unit_price / total_price)
      * category_suggestion (match_type + either category_id/category_name OR proposed_name)
      * status:
 
@@ -55,7 +55,6 @@ You MUST obey ALL rules below. Do not introduce new agents unless explicitly aut
      Currency: {currency}
      Purchased Items:
      {purchased_items}
-     Receipt Image ID: {receipt_id}
      ```
 
    * `RecommendationCoordinatorAgent`

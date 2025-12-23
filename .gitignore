@@ -256,5 +256,9 @@ Thumbs.db
 .coverage
 htmlcov/
 
+# Supabase local development
+supabase/.temp/
+supabase/.branches/
+
 # Logs
 *.log

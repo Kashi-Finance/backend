@@ -1,88 +1,122 @@
 ---
-description: "Scaffold a new FastAPI endpoint that calls one allowed adk agent"
+description: "Scaffold a new FastAPI endpoint in the Kashi Finances backend (non-agent logic)"
 mode: Beast Mode
 ---
 
-You are helping build a new FastAPI endpoint in the Kashi Finances backend.
+You are helping build or update a FastAPI endpoint in the **Kashi Finances backend**.
 
-Follow ALL rules below. Do not skip any step. Do not introduce new agents or new database tables.
+Follow **ALL the rules below**. Do not skip any step. Do not introduce new database tables, fields, or logic that are not defined in the documentation.
 
-1. Scope
-   - This backend serves the Kashi Finances mobile app via HTTP.
-   - Endpoints expose domain-specific functionality backed by adk agents (Google ADK).
-   - You MUST comply with:
-     - .github/copilot-instructions.md
-     - backend/api-architecture.instructions.md
-     - backend/agents.instructions.md
-     - backend/db.instructions.md
-   - Always use the most recent version of the Google ADK documentation when interacting with adk agents.
+---
 
-2. Auth
-   - Unless explicitly documented as `public`, the route is protected.
-   - Implement the Supabase Auth pipeline:
-     a) Read `Authorization: Bearer <token>`
-     b) Verify token signature & expiration with Supabase Auth
-     c) Extract `user_id = auth.uid()`
-     d) If invalid/missing -> raise HTTP 401
-     e) Ignore any `user_id` in the client body or params; always trust the token
-   - The endpoint will act on behalf of that `user_id` only.
+## 1. Scope and References
 
-3. Request / response models
-   - Create a Pydantic RequestModel with STRICT types for all request fields.
-   - Create a Pydantic ResponseModel with STRICT types for the response.
-   - Add docstrings / comments for each field (what it means, allowed values).
-   - The FastAPI route MUST declare `response_model=ResponseModel`.
-   - The function MUST return ONLY data that matches ResponseModel exactly.
+* This backend serves the **Kashi Finances mobile app** via HTTP.
+* Endpoints expose RESTful domain functionality such as **accounts**, **categories**, **budgets**, and **transactions**.
+* You MUST comply with and frequently consult:
 
-4. Domain / intent filter
-   - Before calling any agent, check if the request is in-scope for that agent.
-   - If it's not in-scope:
-     - Do NOT call Gemini / ADK.
-     - Raise `HTTPException(status_code=400, detail={"error":"out_of_scope","details":"..."})`.
+  * `.github/instructions/api-architecture.instructions.md`
+  * `.github/instructions/db.instructions.md`
+  * `DB-documentation.md`
+* Always verify table fields, relationships, and deletion rules directly from **DB-documentation.md** before adding or modifying any database logic.
 
-5. Agent call
-   - You may call EXACTLY ONE allowed adk agent:
-     - InvoiceAgent
-     - RecommendationCoordinatorAgent
-     - SearchAgent (AgentTool of RecommendationCoordinatorAgent)
-     - FormatterAgent (AgentTool of RecommendationCoordinatorAgent)
-   - For recommendation-related flows, call ONLY RecommendationCoordinatorAgent and let it internally use SearchAgent / FormatterAgent as AgentTools.
-   - Pass a strictly typed payload to the agent, never raw request JSON.
-   - Always use the most recent version of the Google ADK documentation for how to invoke adk agents and their AgentTools.
+---
 
-6. Normalization and output
-   - Take the agent's structured output.
-   - Normalize / validate it against ResponseModel.
-   - Return that ResponseModel instance (or a `return ResponseModel(...)`).
-   - For invoice flows, ensure that any `invoice.extracted_text` that will be persisted later matches EXACTLY the canonical multi-line template in backend/api-architecture.instructions.md.
-     The endpoint MUST normalize to that template before persistence.
+## 2. Auth Rules
 
-7. Persistence
-   - DO NOT write SQL inline.
-   - DO NOT guess table names or columns.
-   - Instead, insert placeholder comments like:
-       # TODO(db-team): persist invoice data according to backend/db.instructions.md
-     or
-       # TODO(db-team): save embeddings using text-embedding-3-small
-   - Assume RLS is active and all queries run with `user_id = auth.uid()`.
+* Unless explicitly documented as `public`, every route is **protected**.
+* Implement the **Supabase Auth pipeline**:
 
-8. Logging
-   - Use `logger = logging.getLogger(__name__)`.
-   - Log only high-level events (e.g. "InvoiceAgent called").
-   - Never log sensitive invoice text, raw receipts, or full financial details.
+  1. Read `Authorization: Bearer <token>`.
+  2. Verify token signature and expiration using Supabase Auth.
+  3. Extract `user_id = auth.uid()`.
+  4. If invalid or missing, raise `HTTP 401 Unauthorized`.
+  5. Ignore any `user_id` in client request body or parameters; always trust the token.
+* The endpoint acts **only** on behalf of that authenticated `user_id`.
 
-9. Output format
-   - The final code you generate MUST:
-     - Create/extend a router file in `backend/routes/...`
-     - Define RequestModel and ResponseModel in `backend/schemas/...`
-     - Import and use the correct adk agent from `backend/agents/...`
-     - Expose the FastAPI route with `@router.post(...)` (or `get`, etc.) and `response_model=ResponseModel`.
-     - Follow all steps above in order, especially auth and domain filtering.
+---
 
-10. Style
-   - Every function and method MUST have explicit type hints.
-   - No placeholder logic for deployment or Cloud Run.
-   - If you need DB info, add a TODO comment pointing to backend/db.instructions.md
-     instead of inventing anything.
+## 3. Request / Response Models
 
-Return ONLY the code / diffs needed to add this new endpoint following these rules.
+* Define a **Pydantic RequestModel** and **ResponseModel** in `backend/schemas/...`.
+* Use **strict typing** for all fields (no implicit types or `Any`).
+* Add docstrings or comments for each field: meaning, allowed values, and units.
+* The FastAPI route MUST declare `response_model=ResponseModel`.
+* The function MUST return data that exactly matches the `ResponseModel`.
+
+---
+
+## 4. Database and Persistence
+
+* **Never write raw SQL** inline.
+* Always reference schemas, relationships, and constraints from `DB-documentation.md`.
+* Apply the correct **delete rules** exactly as defined.
+* Assume **Row Level Security (RLS)** is active and scope queries by `user_id = auth.uid()`.
+* For create, read, update, or delete operations, follow the existing CRUD patterns used in similar modules.
+* For complex operations, ensure transactional safety using existing helper functions or ORM patterns.
+
+---
+
+## 5. Validation and Domain Logic
+
+* Validate request data carefully before any DB operation.
+* Reject malformed input with clear `HTTP 400` errors.
+* Use helper functions or services for repetitive domain logic.
+* If the endpoint affects multiple entities (e.g., category deletion affects budgets), ensure cascading updates comply with DB rules.
+
+---
+
+## 6. Logging and Observability
+
+* Use `logger = logging.getLogger(__name__)`.
+* Log high-level actions only, for example:
+
+  * "Account created successfully"
+  * "Budget updated"
+* **Never** log sensitive data (user tokens, financial values, or identifiers).
+
+---
+
+## 7. Output and Structure
+
+* The generated code MUST:
+
+  * Add or extend a router file under `backend/routes/...`
+  * Define or reuse schemas in `backend/schemas/...`
+  * Implement FastAPI routes using `@router.post(...)`, `@router.get(...)`, etc., with `response_model=ResponseModel`.
+  * Follow all authentication, validation, and persistence steps outlined above.
+
+* After implementation, update **`API-endpoints.md`** to include:
+
+  * Route path and HTTP method.
+  * Request and response model summaries.
+  * Auth requirements.
+  * Domain-specific notes such as immutability, ownership, or deletion behavior.
+
+---
+
+## 8. Style and Quality
+
+* Every function and class MUST include explicit type hints.
+* Follow existing backend conventions for naming, file organization, and imports.
+* Remove unused imports or dead code.
+* Do not use placeholder or temporary logic.
+* Ensure **API-endpoints.md** accurately documents your changes.
+
+Return ONLY the code or diffs needed to implement the new or updated endpoint following all the rules above.
+
+---
+
+## 9. Documentation Update
+
+* After implementing or modifying any endpoint, ensure all related details are added or updated in API-endpoints.md, including:
+
+  * Route path and HTTP method
+
+  * Request and response models
+
+  * Auth requirements
+
+  * Domain rules or special notes (immutability, ownership, deletion behavior)
+
+Each update must summarize the purpose, inputs/outputs, and how the endpoint or agent integrates within the Kashi Finances system.

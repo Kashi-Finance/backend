@@ -1,23 +1,40 @@
 """
-adk Agents for Kashi Finances Backend.
+AI Components for Kashi Finances Backend.
 
-Contains implementations of the four allowed adk agents built on Google ADK:
-- InvoiceAgent: OCR and structured extraction from receipts/invoices
-- RecommendationCoordinatorAgent: Orchestrates recommendation flows
-- SearchAgent: AgentTool for product/offer search (used by RecommendationCoordinatorAgent)
-- FormatterAgent: AgentTool for result formatting (used by RecommendationCoordinatorAgent)
+Contains implementations of AI-powered workflows:
 
-CRITICAL RULES (from .github/instructions/adk-agents.instructions.md):
-- These are the ONLY allowed adk agents
-- SearchAgent and FormatterAgent are AgentTools, NOT exposed to API layer directly
-- API endpoints call RecommendationCoordinatorAgent, which orchestrates its AgentTools
-- All agents MUST define strict typed input/output schemas (JSON-serializable)
-- All agents MUST reject out-of-domain requests
-- All agents MUST NOT write to database directly (return structured data only)
+1. InvoiceAgent (Single-Shot Multimodal Workflow)
+   - Uses Gemini vision for OCR and structured extraction from receipts
+   - NOT an ADK agent - uses direct Gemini API
 
-Always use the most recent version of the Google ADK documentation when creating
-or modifying adk agents or their schemas.
+2. Recommendation System (Web-Grounded LLM)
+   - Uses Gemini with Google Search grounding for product recommendations
+   - NOT an ADK agent - uses Google Gen AI SDK with Google Search tool
+   - Located in: backend/services/recommendation_service.py
 
-TODO: Implement adk agents following .github/instructions/adk-agents.instructions.md
-TODO: Each agent will be in its own module (invoice_agent.py, recommendation_coordinator_agent.py, etc.)
+The project uses simplified LLM workflows instead of complex multi-agent
+architectures. The recommendation system uses Gemini with Google Search grounding
+for real, web-verified product recommendations.
+
+See .github/instructions/adk-agents.instructions.md for details.
 """
+
+from backend.agents.invoice import (
+    INPUT_SCHEMA as INVOICE_INPUT_SCHEMA,
+)
+from backend.agents.invoice import (
+    OUTPUT_SCHEMA as INVOICE_OUTPUT_SCHEMA,
+)
+from backend.agents.invoice import (
+    InvoiceAgentInput,
+    InvoiceAgentOutput,
+    run_invoice_agent,
+)
+
+__all__ = [
+    "run_invoice_agent",
+    "InvoiceAgentInput",
+    "InvoiceAgentOutput",
+    "INVOICE_INPUT_SCHEMA",
+    "INVOICE_OUTPUT_SCHEMA",
+]

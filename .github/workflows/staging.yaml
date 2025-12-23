@@ -1,0 +1,157 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+
+# Cancel in-progress deployments when a new one is triggered
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: true
+
+jobs:
+  # Wait for CI to pass before deploying
+  wait-for-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Wait for CI workflow to complete
+        uses: lewagon/wait-on-check-action@v1.3.4
+        with:
+          ref: ${{ github.sha }}
+          check-name: 'lint-and-test'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10
+          allowed-conclusions: success
+
+      - name: CI passed - proceeding with deployment
+        run: echo "✅ CI tests passed, proceeding with staging deployment"
+
+  deploy-staging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: wait-for-ci  # Only deploy after CI passes
+
+    environment:
+      name: staging
+      url: ${{ steps.get-url.outputs.SERVICE_URL }}
+
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.STAGING_DB_PASSWORD }}
+      SUPABASE_PROJECT_ID: ${{ secrets.STAGING_PROJECT_ID }}
+      GCP_PROJECT_ID: ${{ secrets.STAGING_GCP_PROJECT_ID }}
+      GCP_REGION: ${{ secrets.GCP_REGION || 'us-central1' }}
+      CLOUD_RUN_SERVICE: kashi-backend-staging
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # NOTE: Tests already ran in CI workflow (wait-for-ci job verified they passed)
+      # No need to run tests again here - this saves ~2-3 minutes per deployment
+
+      # ============================================================================
+      # Supabase Migrations
+      # ============================================================================
+      
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Authenticate Supabase CLI
+        run: supabase login --token "$SUPABASE_ACCESS_TOKEN"
+
+      - name: Link to Supabase Staging project
+        run: supabase link --project-ref $SUPABASE_PROJECT_ID --password $SUPABASE_DB_PASSWORD
+
+      - name: Push DB migrations to Staging
+        run: |
+          echo "📦 Applying migrations to staging Supabase project..."
+          supabase db push --password $SUPABASE_DB_PASSWORD
+          echo "✅ Migrations applied successfully"
+
+      # ============================================================================
+      # Google Cloud Run Deployment
+      # ============================================================================
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.STAGING_GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev
+
+      - name: Build and push Docker image
+        run: |
+          IMAGE_NAME="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/kashi/backend:${{ github.sha }}"
+          IMAGE_LATEST="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/kashi/backend:latest"
+          
+          docker build -t $IMAGE_NAME -t $IMAGE_LATEST .
+          docker push $IMAGE_NAME
+          docker push $IMAGE_LATEST
+          
+          echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
+
+      - name: Deploy to Cloud Run (Staging)
+        run: |
+          gcloud run deploy ${{ env.CLOUD_RUN_SERVICE }} \
+            --image ${{ env.IMAGE_NAME }} \
+            --platform managed \
+            --region ${{ env.GCP_REGION }} \
+            --allow-unauthenticated \
+            --memory 512Mi \
+            --cpu 1 \
+            --min-instances 0 \
+            --max-instances 10 \
+            --timeout 300 \
+            --set-env-vars "ENVIRONMENT=staging" \
+            --set-env-vars "LOG_LEVEL=info" \
+            --set-env-vars "SUPABASE_URL=${{ secrets.STAGING_SUPABASE_URL }}" \
+            --set-env-vars "SUPABASE_PUBLISHABLE_KEY=${{ secrets.STAGING_SUPABASE_PUBLISHABLE_KEY }}" \
+            --set-env-vars "SUPABASE_STORAGE_BUCKET=${{ secrets.SUPABASE_STORAGE_BUCKET || 'invoices' }}" \
+            --set-env-vars "CORS_ORIGINS=${{ secrets.STAGING_CORS_ORIGINS || 'http://localhost:3000' }}" \
+            --set-secrets "GOOGLE_API_KEY=${{ secrets.STAGING_GOOGLE_API_KEY_SECRET }}:latest" \
+            --service-account ${{ secrets.STAGING_SERVICE_ACCOUNT }}
+
+      - name: Get Cloud Run service URL
+        id: get-url
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${{ env.CLOUD_RUN_SERVICE }} \
+            --region ${{ env.GCP_REGION }} \
+            --format 'value(status.url)')
+          echo "🚀 Staging deployed to: $SERVICE_URL"
+          echo "SERVICE_URL=$SERVICE_URL" >> $GITHUB_ENV
+          echo "SERVICE_URL=$SERVICE_URL" >> $GITHUB_OUTPUT
+
+      - name: Test deployed service health
+        run: |
+          # Wait for service to be ready
+          sleep 10
+          
+          # Test health endpoint
+          curl -f ${{ env.SERVICE_URL }}/health || {
+            echo "❌ Health check failed"
+            exit 1
+          }
+          
+          echo "✅ Staging deployment successful and healthy"
+
+      - name: Deployment summary
+        run: |
+          echo "## 🎉 Staging Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Service**: ${{ env.CLOUD_RUN_SERVICE }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **URL**: ${{ env.SERVICE_URL }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY

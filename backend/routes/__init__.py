@@ -1,9 +1,6 @@
 """
-API route modules for Kashi Finances Backend.
+FastAPI routers for all API endpoints.
 
-Contains FastAPI routers grouped by feature area (health, invoices, 
-recommendations, transactions, accounts, budgets, wishlists).
-
-Each router follows the 6-step endpoint flow defined in:
-- .github/instructions/api-architecture.instructions.md (Section 4)
+Each module defines a router for a specific domain (invoices, accounts, etc.)
+All routers follow the 6-step endpoint flow from .github/instructions/api-architecture.instructions.md
 """
