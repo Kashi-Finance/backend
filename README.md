@@ -25,61 +25,81 @@ backend/
     └── ...              # Future: Supabase client, RLS-compliant queries
 ```
 
-## Testing
+## Rules for Pushing and Merging
 
-### Unit Tests (Default)
+These rules define how contributors should work with branches, commits, and pull requests in **Kashi Finances** to ensure a stable CI/CD pipeline and reliable Supabase deployments.
 
-```bash
-pytest tests/
-```
+---
 
-All tests use mocks by default. Safe for CI/CD. Fast (~2-5 seconds).
+### Branch Structure
 
-### Integration Tests
+* **feature/** → individual development branches (e.g., `feature/add-budget-endpoint`).
+* **develop** → staging branch connected to the staging Supabase environment.
+* **main** → production branch connected to the production Supabase environment.
 
-```bash
-# 1. Navigate to backend directory
-cd /Users/andres/Documents/Kashi/backend
+---
 
-# 2. Setup environment variables
-source scripts/integration/setup-env.sh
+### Direct Push Policy
 
-# 3. Start backend server in a separate terminal
-./scripts/integration/START-BACKEND.sh
+* **Never push directly to `develop` or `main`.**
 
-# 4. Create/renew test user (updates .env with fresh token)
-./scripts/integration/00-create-test-user.sh
+  * These branches represent deployed environments and must remain stable.
+  * All changes must enter them **through pull requests (PRs)**.
 
-# 5. Run all tests
-./scripts/integration/run-all.sh
+* DO NOT direct push to `develop` or `main` wto prevent accidental migrations.
 
-# Or run individual test:
-source scripts/integration/setup-env.sh
-./scripts/integration/11-profile-get.sh
-```
+* You can freely push to your own `feature/*` branches.
 
-## Flujo 
-Dev trabaja en feature/cualquier-cosa.
-Hace push a esa rama.
-Abre PR → develop.
-develop se usa como staging (deploy automático).
-Cuando ya está probado en staging, se abre PR de develop → main.
-main dispara el pipeline de prod.
+---
 
+### Pull Request Rules
 
-**Deployment Command:**
-```bash
-gcloud run deploy kashi-backend-staging \
-  --source . \
-  --region=us-central1 \
-  --allow-unauthenticated
-```
+#### Creating PRs
 
+* Every change must be proposed via a **pull request**.
+* PR titles should be clear and concise (e.g., `Add user analytics endpoint`).
+* Each PR should target:
 
-## Database Migrations
+  * `develop` → for staging/testing.
+  * `main` → only from `develop` after staging is validated.
 
-```bash
-supabase login
-supabase link --project-ref gzdwagvbbykzwwdesuac
-supabase db push
-```
+#### Continuous Integration (CI)
+
+* All PRs trigger the `CI` workflow (`.github/workflows/ci.yaml`).
+* Merging is **blocked** until all CI checks pass successfully.
+* CI runs include:
+
+  * Linting / tests (backend)
+  * Local Supabase validation
+  * Schema integrity checks
+
+---
+
+### Deployment Behavior
+
+* Merging into `develop` triggers **automatic migration** of the staging Supabase database via `staging.yaml`.
+* Merging into `main` triggers **production deployment** via `production.yaml`.
+* The staging deploy is blocked if the last commit is not a merge PR (protection against direct pushes).
+
+---
+
+### Best Practices
+
+* Use **small, atomic commits** with descriptive messages.
+* Keep branches up to date with `develop` before opening a PR.
+* Avoid force pushes (`--force`) unless absolutely necessary.
+* If a PR introduces schema changes, verify migrations locally with `supabase db push` before committing.
+
+---
+
+### Enforcement Summary
+
+| Branch    | Direct Push | Requires PR | Auto Deploys |
+| --------- | ----------- | ----------- | ------------ |
+| feature/* | ✅ Allowed   | ❌ Optional  | ❌ No         |
+| develop   | 🚫 Blocked  | ✅ Yes       | ✅ Staging    | 
+| main      | 🚫 Blocked  | ✅ Yes       | ✅ Production | 
+
+---
+
+> ⚠️ Any direct push to `develop` or `main` may be reverted and trigger an internal review.
