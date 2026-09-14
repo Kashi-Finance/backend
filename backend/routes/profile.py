@@ -363,7 +363,7 @@ async def create_profile(
     - Profile is NOT physically deleted
     - Instead, personal fields are cleared/anonymized
     - Country and currency_preference are kept for system consistency
-    - The profile row remains to support localization for agents
+    - The profile row remains to support localization for LLM features
 
     This endpoint:
     - Clears first_name, last_name, avatar_url

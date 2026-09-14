@@ -4,7 +4,8 @@ InvoiceAgent JSON Schemas
 OpenAPI-compatible schemas for API/runtime validation.
 These mirror the TypedDict definitions in types.py exactly.
 
-NOTE: This agent is implemented as a single-shot multimodal workflow (not ADK),
+NOTE: The invoice OCR workflow (legacy name: InvoiceAgent) is implemented as a
+single-shot multimodal workflow with no agent framework,
 so tool declarations are not needed. These schemas are kept for documentation
 and potential future validation needs.
 """

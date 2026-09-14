@@ -3,9 +3,10 @@ InvoiceAgent Prompt Templates
 
 Contains both the system prompt and user prompt builder for InvoiceAgent.
 
-The InvoiceAgent is implemented as a single-shot multimodal workflow (not an ADK agent).
+The invoice OCR workflow (legacy name: InvoiceAgent) is implemented as a
+single-shot multimodal workflow with no agent framework.
 All required user context (user profile, currency preference, and user categories) is
-provided by the caller. The agent MUST NOT attempt to call external tools or services.
+provided by the caller. The workflow MUST NOT attempt to call external tools or services.
 
 Architecture:
 - Pattern: Single-shot multimodal extraction

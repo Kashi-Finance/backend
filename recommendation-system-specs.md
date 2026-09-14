@@ -4,7 +4,12 @@
 
 **Architecture Pattern**: Web-Grounded LLM (Single Gemini API Call with Google Search)  
 
-**Model**: Gemini 2.5 Flash (`gemini-2.5-flash`)  
+**Model**: Gemini 2.5 Flash (`gemini-2.5-flash`) 
+
+> **Path note (2026):** `backend/agents/` was renamed to `backend/llm/`. Any
+> `backend/agents/...` path in this document means `backend/llm/...`, except in
+> the "Files Deleted (November 2025)" history section where the old paths are
+> intentional.
 
 **Architecture Pattern**: Web-Grounded LLM (Single Gemini API Call with Google Search)  **Architecture Pattern**: Prompt Chaining (Single LLM Call)  
 
@@ -1106,7 +1111,7 @@ async def test_query_recommendations_success(mock_client):
 - `backend/agents/recommendation/prompts/` (Old directory structure)
 
 ### Files Created/Refactored (November 2025)
-- `backend/agents/recommendation/prompts.py` - New single file with XML-structured prompts
+- `backend/llm/recommendation/prompts.py` - New single file with XML-structured prompts (renamed from `backend/agents/` in 2026)
 - `backend/services/recommendation_service.py` - Complete rewrite for Prompt Chaining
 - `backend/config.py` - Added DEEPSEEK_API_KEY
 - `.env.example` - Added DEEPSEEK_API_KEY placeholder

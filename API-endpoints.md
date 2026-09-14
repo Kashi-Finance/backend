@@ -427,4 +427,4 @@ profile ──────────────► (context for all endpoints
     └── cross-cutting.md      # Security, dependencies, patterns
 \`\`\`
 
-This structure follows Anthropic's progressive disclosure pattern for optimal AI agent context consumption.
+This structure follows Anthropic's progressive disclosure pattern for optimal context consumption (load only the domain doc you need).

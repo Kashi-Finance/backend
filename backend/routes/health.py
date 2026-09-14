@@ -7,8 +7,8 @@ status check for load balancers, monitoring, and deployment verification.
 Follows api-architecture.instructions.md Section 4 (Endpoint Flow):
 - Step 1: Auth → SKIPPED (explicitly public endpoint)
 - Step 2: Parse/Validate → No request body needed
-- Step 3: Domain Filter → N/A (no agent call)
-- Step 4: Call Agent → N/A
+- Step 3: Domain Filter → N/A (no LLM call)
+- Step 4: Call Agent → N/A (no LLM workflow; pure status check)
 - Step 5: Map to ResponseModel → Always returns HealthResponse
 - Step 6: Persistence → N/A
 """

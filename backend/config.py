@@ -30,7 +30,7 @@ class Settings:
             return ""
         return f"{self.SUPABASE_URL}/auth/v1/.well-known/jwks.json"
 
-    # Google Gemini API (used for InvoiceAgent and Recommendation System)
+    # Google Gemini API (used for invoice OCR and recommendation LLM workflows)
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
 
     # Supabase Storage Configuration

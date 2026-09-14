@@ -1,8 +1,9 @@
 """
-InvoiceAgent Runner
+Invoice OCR workflow runner (legacy name: InvoiceAgent).
 
 Single-shot LLM extraction workflow. Processes receipt images using Gemini
-with a complete context prompt (no iterative function calling).
+(via the google-genai SDK) with a complete context prompt
+(no iterative function calling, no agent framework).
 """
 
 import base64
@@ -13,12 +14,12 @@ from typing import Dict, List, Optional
 from google import genai
 from google.genai import types
 
-from backend.agents.invoice.prompts import (
+from backend.config import settings
+from backend.llm.invoice.prompts import (
     INVOICE_AGENT_SYSTEM_PROMPT,
     build_invoice_agent_user_prompt,
 )
-from backend.agents.invoice.types import CategorySuggestion, InvoiceAgentOutput
-from backend.config import settings
+from backend.llm.invoice.types import CategorySuggestion, InvoiceAgentOutput
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,8 @@ def run_invoice_agent(
         - Does NOT write to database (persistence handled by API layer)
 
     Notes:
-        - This is NOT an ADK agent with tools - it's a deterministic multimodal LLM workflow
+        - No agent framework involved: deterministic single multimodal LLM call
+          with all context provided up front (no tools, no loop)
         - Receipt image is REQUIRED for processing
         - All required context (categories, profile) must be provided by caller
         - No iterative function calling - one prompt, one response

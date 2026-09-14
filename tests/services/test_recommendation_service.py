@@ -30,7 +30,7 @@ from backend.schemas.recommendations import (
     RecommendationQueryResponseNoValidOption,
     ProductRecommendation,
 )
-from backend.agents.recommendation.prompts import build_recommendation_user_prompt
+from backend.llm.recommendation.prompts import build_recommendation_user_prompt
 
 
 # =============================================================================

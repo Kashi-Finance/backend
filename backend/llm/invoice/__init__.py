@@ -1,24 +1,22 @@
 """
-InvoiceAgent Package
+Invoice OCR workflow package (legacy name: InvoiceAgent).
 
-Modular InvoiceAgent implementation for extracting structured data from receipts.
-
-This package provides a complete invoice OCR and extraction pipeline using
-Google Gemini with a single-shot LLM call. The agent can:
-- Extract store name, transaction time, total amount, currency
-- Parse individual line items with quantities and prices
-- Suggest category assignments based on user's existing categories
-- Handle invalid images and out-of-scope requests gracefully
+Single-shot invoice OCR and extraction pipeline using Google Gemini
+(via the google-genai SDK, no agent framework). The workflow:
+- Extracts store name, transaction time, total amount, currency
+- Parses individual line items with quantities and prices
+- Suggests category assignments based on user's existing categories
+- Handles invalid images and out-of-scope requests gracefully
 
 Main Components:
 - types: TypedDict definitions for structured data
 - tools: Backend helper functions (profile, categories) - called by endpoint
 - schemas: JSON schemas for validation
 - prompts: System prompts for the LLM
-- agent: Main runner function that orchestrates Gemini interaction
+- agent: Main runner function that performs the single Gemini call
 
 Usage:
-    from backend.agents.invoice import run_invoice_agent
+    from backend.llm.invoice import run_invoice_agent
 
     result = run_invoice_agent(
         user_id="user-uuid-from-auth",
@@ -30,19 +28,19 @@ Usage:
     )
 """
 
-from backend.agents.invoice.agent import run_invoice_agent
-from backend.agents.invoice.prompts import (
+from backend.llm.invoice.agent import run_invoice_agent
+from backend.llm.invoice.prompts import (
     INVOICE_AGENT_SYSTEM_PROMPT,
 )
-from backend.agents.invoice.schemas import (
+from backend.llm.invoice.schemas import (
     INPUT_SCHEMA,
     OUTPUT_SCHEMA,
 )
-from backend.agents.invoice.tools import (
+from backend.llm.invoice.tools import (
     get_user_categories,
     get_user_profile,
 )
-from backend.agents.invoice.types import (
+from backend.llm.invoice.types import (
     CategorySuggestion,
     InvoiceAgentInput,
     InvoiceAgentOutput,

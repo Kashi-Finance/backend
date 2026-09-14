@@ -1,7 +1,8 @@
 """
 Invoice OCR API endpoints.
 
-Provides endpoints for uploading and processing receipt images using InvoiceAgent.
+Provides endpoints for uploading and processing receipt images using the
+invoice OCR workflow (legacy name: InvoiceAgent, a single-shot Gemini call).
 
 Flow:
 1. POST /invoices/ocr - Upload image, get draft extraction (PREVIEW ONLY, not persisted)
@@ -14,10 +15,10 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
-from backend.agents.invoice import run_invoice_agent
-from backend.agents.invoice.tools import get_user_categories
 from backend.auth.dependencies import AuthenticatedUser, get_authenticated_user
 from backend.db.client import get_supabase_client
+from backend.llm.invoice import run_invoice_agent
+from backend.llm.invoice.tools import get_user_categories
 from backend.schemas.invoices import (
     CategorySuggestionResponse,
     InvoiceCommitRequest,
@@ -56,7 +57,7 @@ router = APIRouter(prefix="/invoices", tags=["invoices"])
 
     This endpoint:
     - Accepts image files (JPEG, PNG, etc.)
-    - Calls InvoiceAgent to extract structured data
+    - Calls the invoice OCR workflow to extract structured data
     - Returns either a DRAFT preview or INVALID_IMAGE error
     - NEVER persists to database (preview only)
 
@@ -91,12 +92,12 @@ async def process_invoice_ocr(
     - Check if uploaded file is actually an image
     - Verify file size is reasonable (prevent DoS)
 
-    Step 4: Call ONE ADK Agent
-    - Call InvoiceAgent with validated inputs
-    - Agent returns structured output or out_of_scope
+    Step 4: Call invoice OCR workflow (single-shot, no agent framework)
+    - Call run_invoice_agent() with validated inputs
+    - Workflow returns structured output or out_of_scope
 
     Step 5: Map Output -> ResponseModel
-    - Convert agent output to Pydantic response
+    - Convert workflow output to Pydantic response
     - Return InvoiceOCRResponseDraft or InvoiceOCRResponseInvalid
 
     Step 6: Persistence
@@ -145,7 +146,7 @@ async def process_invoice_ocr(
             }
         )
 
-    # Encode image as base64 for agent
+    # Encode image as base64 for the workflow
     image_base64 = base64.b64encode(image_bytes).decode("utf-8")
 
     logger.info(
@@ -159,10 +160,10 @@ async def process_invoice_ocr(
 
     # NOTE: Image will NOT be uploaded to storage during OCR (draft phase).
     # Upload happens ONLY when user confirms via /invoices/commit endpoint.
-    # We do NOT pass storage_path to the agent because the image doesn't exist in storage yet.
+    # We do NOT pass storage_path to the workflow because the image doesn't exist in storage yet.
 
     # Fetch user profile for country and currency_preference
-    # This allows the InvoiceAgent to provide localized extraction
+    # This allows the invoice OCR workflow to provide localized extraction
     # (e.g. recognize GTQ for Guatemala, MXN for Mexico, etc.)
     profile = await get_user_profile(supabase_client=supabase_client, user_id=user_id)
 
@@ -183,7 +184,7 @@ async def process_invoice_ocr(
             f"country={country}, currency={currency_preference}"
         )
 
-    # Fetch user's categories for the agent
+    # Fetch user's categories for the workflow
     try:
         user_categories = get_user_categories(supabase_client, user_id)
     except Exception as e:
@@ -192,7 +193,7 @@ async def process_invoice_ocr(
         user_categories = []
 
 
-    # --- STEP 4: Call Agent ---
+    # --- STEP 4: Call invoice OCR workflow ---
     try:
         agent_output = run_invoice_agent(
             user_id=user_id,
@@ -237,14 +238,14 @@ async def process_invoice_ocr(
             f"total={agent_output.get('total_amount')} {agent_output.get('currency')}"
         )
 
-        # Map agent output to response schema
-        # Normalize optional agent fields safely (agent_output keys may exist but be None)
+        # Map workflow output to response schema
+        # Normalize optional workflow fields safely (agent_output keys may exist but be None)
         purchased_items_raw = agent_output.get("purchased_items") or []
         items = []
         for item in purchased_items_raw:
             # Basic validation for each item; if required fields missing, skip the item
             if not item or item.get("description") is None or item.get("line_total") is None or item.get("quantity") is None:
-                logger.debug("Skipping malformed purchased item from agent output")
+                logger.debug("Skipping malformed purchased item from workflow output")
                 continue
             items.append(
                 PurchasedItemResponse(
@@ -259,7 +260,7 @@ async def process_invoice_ocr(
         cs: Any = agent_output.get("category_suggestion") or {}
         match_type = cs.get("match_type")
         if match_type not in ("EXISTING", "NEW_PROPOSED"):
-            logger.debug("Agent returned missing or invalid category_suggestion; defaulting to NEW_PROPOSED")
+            logger.debug("Workflow returned missing or invalid category_suggestion; defaulting to NEW_PROPOSED")
             match_type = "NEW_PROPOSED"
 
         # Build category_suggestion with all 4 fields (some may be null depending on match_type)
@@ -296,7 +297,7 @@ async def process_invoice_ocr(
             missing_required.append("currency")
 
         if missing_required:
-            logger.warning(f"Agent returned DRAFT but missing required fields: {missing_required}")
+            logger.warning(f"Workflow returned DRAFT but missing required fields: {missing_required}")
             return InvoiceOCRResponseInvalid(
                 status="INVALID_IMAGE",
                 reason=(
@@ -321,7 +322,7 @@ async def process_invoice_ocr(
         )
 
     else:
-        # Unknown status from agent
+        # Unknown status from workflow
         logger.error(f"Unknown agent status: {agent_output.get('status')}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

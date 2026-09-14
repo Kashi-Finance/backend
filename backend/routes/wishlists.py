@@ -169,7 +169,7 @@ async def create_new_wishlist(
     - Validates selected_items (max 3) if provided
 
     Step 3: Domain & Intent Filter
-    - No ADK agent involved (pure CRUD)
+    - No LLM workflow involved (pure CRUD)
     - Validate budget_hint > 0 (enforced by Pydantic)
 
     Step 4: Call Service

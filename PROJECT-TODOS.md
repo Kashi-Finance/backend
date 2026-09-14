@@ -332,7 +332,7 @@ See `docs/monitoring/README.md` for full setup instructions and verification che
 
 | Component | Type | Model | File |
 |-----------|------|-------|------|
-| InvoiceAgent | Single-shot multimodal | Gemini (vision) | `backend/agents/invoice/` |
+| Invoice OCR (legacy name: InvoiceAgent) | Single-shot multimodal | Gemini (vision) | `backend/llm/invoice/` |
 | Recommendations | Prompt Chaining | DeepSeek V3.2 | `backend/services/recommendation_service.py` |
 
 > **Note:** The ADK multi-agent architecture (RecommendationCoordinatorAgent → SearchAgent → FormatterAgent) was **deprecated November 2025** in favor of simplified Prompt Chaining.
@@ -341,8 +341,8 @@ See `docs/monitoring/README.md` for full setup instructions and verification che
 
 | System | File |
 |--------|------|
-| Invoice | `backend/agents/invoice/prompts.py` |
-| Recommendations | `backend/agents/recommendation/prompts.py` |
+| Invoice | `backend/llm/invoice/prompts.py` |
+| Recommendations | `backend/llm/recommendation/prompts.py` |
 
 ---
 
@@ -358,7 +358,7 @@ See `docs/monitoring/README.md` for full setup instructions and verification che
 | Database schema | `DB-DDL.txt`, `DB-documentation.md` |
 | API contracts | `API-endpoints.md`, `docs/api/` |
 | RPC documentation | `RPC-documentation.md` |
-| Agent prompts | `backend/agents/*/prompts.py` |
+| LLM prompts | `backend/llm/*/prompts.py` |
 
 ---
 

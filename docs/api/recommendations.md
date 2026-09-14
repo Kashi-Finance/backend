@@ -7,9 +7,9 @@
 - [Recommendations Endpoints](#recommendations-endpoints)
   - [Table of Contents](#table-of-contents)
   - [Endpoint Reference](#endpoint-reference)
-  - [Agent Architecture](#agent-architecture)
+  - [Workflow Architecture](#workflow-architecture)
   - [Response Types](#response-types)
-    - [1. NEEDS\_CLARIFICATION](#1-needs_clarification)
+    - [1. NEEDS\_CLARIFICATION (deprecated)](#1-needs_clarification-deprecated)
     - [2. OK](#2-ok)
     - [3. NO\_VALID\_OPTION](#3-no_valid_option)
   - [POST /recommendations/query](#post-recommendationsquery)
@@ -39,33 +39,38 @@
 
 ---
 
-## Agent Architecture
+## Workflow Architecture (no agents, no ADK)
 
 ```
-RecommendationCoordinatorAgent
-       │
-       ├─► Validates intent (guardrails)
-       ├─► Checks required fields
-       ├─► Calls get_user_profile() for context
-       │
-       ├─► SearchAgent (AgentTool)
-       │       └─► Finds real products matching criteria
-       │
-       └─► FormatterAgent (AgentTool)
-               └─► Validates, cleans, formats results
+POST /recommendations/query|/retry
+        │
+        ├─► Auth (Supabase JWT → user_id)
+        ├─► Endpoint fetches profile (country, currency, locale) via RLS
+        ├─► Intent guardrails (prohibited content → NO_VALID_OPTION, no LLM call)
+        │
+        └─► ONE grounded Gemini 2.5 Flash call (google-genai SDK)
+                │   Tool: GoogleSearch grounding · temp 0.2–0.3 · max 4096 tokens
+                ▼
+            Structured products[] + grounding_metadata → Pydantic response
 ```
 
 **Key Points:**
-- Uses DeepSeek V3.2 via Prompt Chaining architecture
-- Temperature=0.0 for deterministic results
-- All URLs are real and verifiable
-- Agent rejects prohibited content
+- Single-shot grounded LLM call (`backend/services/recommendation_service.py`,
+  prompts in `backend/llm/recommendation/prompts.py`); the ADK-style
+  Coordinator/Search/Formatter prototype was deleted in 11/2025.
+- All URLs/prices come from live Google Search grounding (verifiable)
+- Workflow rejects prohibited content before/inside the call
+- `NEEDS_CLARIFICATION` is deprecated → always `OK` or `NO_VALID_OPTION`
 
 ---
 
 ## Response Types
 
-### 1. NEEDS_CLARIFICATION
+### 1. NEEDS_CLARIFICATION (deprecated)
+
+> Deprecated: single-shot calls cannot ask follow-up questions. The workflow
+> never returns this status; kept here only for backward compatibility with
+> older clients. New clients handle only `OK` and `NO_VALID_OPTION`.
 
 Missing required information:
 
@@ -147,7 +152,7 @@ No suitable recommendations:
 - `query_raw` (string, 3-1000 chars): Natural or technical description
 
 **Optional:**
-- `budget_hint` (decimal, > 0): Maximum budget (if omitted, may get NEEDS_CLARIFICATION)
+- `budget_hint` (decimal, > 0): Maximum budget
 - `preferred_store` (string, max 200 chars): Store preference
 - `user_note` (string, max 1000 chars): Restrictions, style notes
 - `extra_details` (dict): Progressive Q&A answers
@@ -177,7 +182,7 @@ No suitable recommendations:
 
 **Response:** Same three types as `/query`.
 
-**Technical Note:** Identical to `/query` (calls same agent). Separate endpoint for semantic clarity.
+**Technical Note:** Identical to `/query` (calls same workflow). Separate endpoint for semantic clarity.
 
 ---
 
@@ -185,7 +190,7 @@ No suitable recommendations:
 
 ### 1. Intent Validation
 
-Agent rejects before search:
+Workflow rejects before search:
 - Sexual/erotic content → NO_VALID_OPTION
 - Weapons, explosives, regulated items → NO_VALID_OPTION
 - Scams or fake offers → NO_VALID_OPTION
@@ -197,19 +202,19 @@ Agent rejects before search:
 
 ### 3. User Preferences
 
-- Agent respects `user_note` constraints
+- Workflow respects `user_note` constraints
 - Example: `"nada gamer RGB"` → excludes RGB/gamer products
 
 ### 4. URL Verification
 
-- All product URLs must be real
-- Agent never invents/hallucinates URLs
+- All product URLs must be real (grounded in search results)
+- Workflow never invents/hallucinates URLs
 - Uncertain validity → product excluded
 
 ### 5. RLS
 
-- Agent calls `get_user_profile()` with authenticated `user_id`
-- Cannot access other users' data
+- Endpoint fetches `get_user_profile()` with authenticated `user_id` BEFORE the LLM call
+- Workflow itself cannot access other users' data (RLS + prompt-injected context only)
 
 ---
 
@@ -253,7 +258,7 @@ User fills wishlist wizard
 
 ### Field Mapping
 
-FormatterAgent output matches `WishlistItemFromRecommendation`:
+Workflow output matches `WishlistItemFromRecommendation`:
 
 ```
 results_for_user[].product_title    →  selected_items[].product_title
@@ -274,22 +279,19 @@ Frontend passes through unchanged.
 
 ### Timing
 
-Agent orchestration typically takes 3-10 seconds:
-- RecommendationCoordinatorAgent validates intent (~1s)
-- SearchAgent finds products (~3-5s)
-- FormatterAgent formats results (~1-2s)
+Single grounded LLM call, typically a few seconds (target <10s):
 
 **Frontend should show loading state.**
 
 ### Determinism
 
-- Temperature=0.0 for consistent formatting
+- Temperature 0.2–0.3 (near-deterministic for factual queries, slight variety)
 - Results are fresh per query (not cached)
 
 ### Error Handling
 
-All agent errors caught and returned as NO_VALID_OPTION:
-- Agent execution failure → generic error message
+All workflow errors caught and returned as NO_VALID_OPTION:
+- Workflow execution failure → generic error message
 - Invalid user_id → "Invalid request parameters"
 - Unexpected errors → "An error occurred"
 

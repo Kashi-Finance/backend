@@ -13,10 +13,10 @@ The service layer is in:
 - backend/services/recommendation_service.py
 
 Prompt templates are in:
-- backend/agents/recommendation/prompts.py
+- backend/llm/recommendation/prompts.py
 """
 
-from backend.agents.recommendation.prompts import (
+from backend.llm.recommendation.prompts import (
     RECOMMENDATION_SYSTEM_PROMPT,
     build_recommendation_user_prompt,
 )

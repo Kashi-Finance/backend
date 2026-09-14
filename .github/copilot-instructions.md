@@ -1,12 +1,14 @@
-# Kashi Finances – Copilot Instructions (Backend / adk agents API)
+# Kashi Finances – Copilot Instructions (Backend API + LLM workflows)
 
 ## 1. Project Scope
 
 - This repository is ONLY for the backend service that powers Kashi Finances.
 - The backend:
   - Exposes a FastAPI HTTP API for the mobile app.
-  - Orchestrates domain-specific adk agents built on Google ADK.
+  - Runs domain logic plus two single-shot LLM workflows (invoice OCR,
+    recommendations) via the `google-genai` SDK.
   - Performs request validation, authentication, and enforcement of business rules.
+- No agent framework is used (no Google ADK, no runners, no tool loops).
 - This repository is NOT responsible for:
   - Flutter UI code.
   - Database schema design, migrations, SQL, or RLS policy definitions (those live in backend/db.instructions.md).
@@ -14,7 +16,9 @@
 
 Always assume this service will be called by an authenticated Kashi Finances client that expects stable JSON contracts.
 
-Always use the most recent version of the Google ADK documentation when creating or modifying adk agents or their schemas.
+Do NOT follow Google ADK documentation — no ADK is used in this project.
+LLM calls are single-shot `google-genai` SDK calls via `backend/llm/` + services
+(see `.github/instructions/llm-workflows.instructions.md`).
 
 
 ## 2. Tech Stack and Conventions
@@ -30,7 +34,7 @@ Always use the most recent version of the Google ADK documentation when creating
   - `backend/routes/`          → FastAPI routers (HTTP surface)
   - `backend/schemas/`        → Pydantic models for request/response
   - `backend/auth/`           → Auth helpers (Supabase token verification)
-  - `backend/agents/`         → adk agents code
+  - `backend/llm/`           → LLM workflow builders (legacy dir name "agents")
   - `backend/services/`       → Business logic wrappers/orchestrators
   - `backend/utils/`          → Logging, common helpers
   - `backend/db/` or similar  → Data access layer (MUST follow backend/db.instructions.md rules)
@@ -63,9 +67,9 @@ ALL PROTECTED ENDPOINTS MUST FOLLOW THIS AUTH PIPELINE:
 4. If verification fails or token is missing → raise HTTP 401 Unauthorized.
 5. Ignore / override any `user_id` sent by the client. The only source of truth for `user_id` is the Supabase Auth token.
 6. All DB reads/writes MUST assume Row Level Security (RLS) is active and already enforces `user_id = auth.uid()` on every financial row.
-7. Optionally (recommended), fetch the user's profile (country, currency_preference, etc.) for context because some adk agents need this context for localized answers.
+7. Optionally (recommended), fetch the user's profile (country, currency_preference, etc.) for context because the LLM workflows need this context for localized answers.
 
-No request should ever invoke an adk agent if step 1-4 above did not fully pass, unless the endpoint is explicitly documented as public in the endpoint spec.
+No request should ever invoke an LLM workflow if step 1-4 above did not fully pass, unless the endpoint is explicitly documented as public in the endpoint spec.
 
 The authentication rules and which routes are public vs protected are defined in the endpoint documentation. Obey them exactly.
 
@@ -90,12 +94,12 @@ When you create or modify an endpoint:
 - In the endpoint function:
   1. Validate auth via the Supabase pipeline described above (unless route is explicitly public).
   2. Parse and validate the incoming request body into `RequestModel`.
-  3. Apply domain-intent filtering:
-     - Check if the request is actually in-scope for the target adk agent.
+3. Apply domain-intent filtering:
+     - Check if the request is actually in-scope for the target LLM workflow (if the endpoint uses one; most endpoints use none).
      - If the request intent is out-of-scope, immediately raise `HTTPException(status_code=400, detail={ "error": "out_of_scope", "details": "..." })`.
-     - Do NOT call Gemini / ADK at all in that case.
-  4. Call EXACTLY ONE allowed adk agent (see section 5 below), passing only the structured, validated data.
-  5. Receive the agent result, map it into `ResponseModel`.
+     - Do NOT call Gemini at all in that case.
+4. Call EXACTLY ONE allowed LLM workflow (see section 5 below), passing only the structured, validated data — or none at all for pure CRUD endpoints.
+5. Receive the workflow result, map it into `ResponseModel`.
   6. Return the validated response model. The FastAPI decorator MUST declare `response_model=ResponseModel`.
 
 - Documentation: ALWAYS update `API-endpoints.md` when creating or modifying an endpoint if the change is significant and should be documented for the team or API consumers.
@@ -118,17 +122,17 @@ There are exactly **two (2)** AI-powered components in this project:
 ### 5.1 InvoiceAgent (Single-Shot Multimodal Workflow)
 - **Implementation:** Single-shot Gemini vision call
 - **Purpose:** OCR and structured extraction from receipt images
-- **NOT an ADK agent:** Uses direct Gemini API
+- **No agent framework:** single-shot Gemini call via the google-genai SDK
 
 ### 5.2 Recommendation System (Web-Grounded LLM)
 - **Implementation:** Single-shot Gemini call with Google Search grounding
 - **Model:** Gemini 2.5 Flash (`gemini-2.5-flash`)
 - **Purpose:** Product recommendations with REAL web data via Google Search
-- **NOT an ADK agent:** Uses Google Gen AI SDK with Google Search tool
+- **No agent framework:** single-shot Gemini call via the google-genai SDK with the Google Search tool
 - **Location:** `backend/services/recommendation_service.py`
 
 ### Rules:
-- Do NOT create new ADK agents
+- Do NOT introduce an agent framework (Google ADK or similar) or new autonomous agents
 - Do NOT reference the old multi-agent architecture (RecommendationCoordinatorAgent, SearchAgent, FormatterAgent)
 - Each AI component MUST:
   - Have a single, well-defined purpose
@@ -136,7 +140,7 @@ There are exactly **two (2)** AI-powered components in this project:
   - Return strict typed JSON output
   - Never perform database writes directly (persistence handled by API layer under RLS)
 
-For detailed specifications, see `.github/instructions/adk-agents.instructions.md`.
+For detailed specifications, see `.github/instructions/llm-workflows.instructions.md`.
 
 
 ## 6. Database / Persistence Rules
@@ -146,7 +150,7 @@ For detailed specifications, see `.github/instructions/adk-agents.instructions.m
 - If you need to persist or read something, add a comment like:
   `# TODO(db-team): persist invoice data according to backend/db.instructions.md`
   and stop there.
-- `invoice.extracted_text` MUST ALWAYS respect the required canonical format described in backend/api-architecture.instructions.md and backend/agents.instructions.md.
+- `invoice.extracted_text` MUST ALWAYS respect the required canonical format described in backend/api-architecture.instructions.md and backend/llm-workflows.instructions.md.
 
 Never bypass RLS. Assume every row is protected by `user_id = auth.uid()`.
 
@@ -202,7 +206,7 @@ API-endpoints.md           ← Concise index - START HERE
 3. If you need to change an endpoint contract:
    - Update `API-endpoints.md` index first
    - Update the corresponding `docs/api/<domain>.md` file
-   - Propagate changes to tests, schemas, services, agent specs
+    - Propagate changes to tests, schemas, services, workflow specs
 4. All Pydantic request/response models in `backend/schemas/` **MUST match exactly** the shape and field names documented in `API-endpoints.md`.
 
 This ensures:
@@ -210,7 +214,7 @@ This ensures:
 - Type safety across backend/frontend integration
 - Consistency in Pydantic validation
 - Single point of reference when debugging API issues
-- Optimal context loading for AI agents (progressive disclosure)
+- Optimal context loading for automation (progressive disclosure)
 
 
 ## 7. Style, Formatting, and Quality
@@ -224,7 +228,7 @@ This ensures:
 
 ## 8. Testing / CI Expectations
 
-All new backend code (routes, services, auth helpers, and adk agent wrappers) MUST include or update **pytest tests** under the `tests/` folder. The CI workflow executes pytest automatically, and missing or failing tests will block merges.
+All new backend code (routes, services, auth helpers, and LLM workflow modules) MUST include or update **pytest tests** under the `tests/` folder. The CI workflow executes pytest automatically, and missing or failing tests will block merges.
 
 ### CI Workflow Context
 
@@ -242,7 +246,7 @@ If the `tests/` folder exists, pytest must pass. If it doesn't exist, CI will sk
 
 * Place all tests under `tests/` with clear module structure mirroring `backend/`.
 * Each new FastAPI endpoint must have corresponding tests that use `TestClient`.
-* Include realistic but **mocked** data for ADK agent interactions.
+* Include realistic but **mocked** data for LLM workflow calls.
 * Use **mocking** for all external dependencies:
 
   * No real Gemini or Supabase Cloud calls.

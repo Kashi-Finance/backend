@@ -193,7 +193,7 @@ async def delete_user_profile(
 
     The delete operation:
     - Clears first_name, last_name, avatar_url
-    - Keeps country and currency_preference (needed by agents)
+    - Keeps country and currency_preference (needed by LLM workflows)
     - Sets first_name to "Deleted User" for system consistency
 
     Args:
