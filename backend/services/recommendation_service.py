@@ -36,11 +36,11 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel
 
-from backend.agents.recommendation.prompts import (
+from backend.config import settings
+from backend.llm.recommendation.prompts import (
     RECOMMENDATION_SYSTEM_PROMPT,
     build_recommendation_user_prompt,
 )
-from backend.config import settings
 from backend.schemas.recommendations import (
     ProductRecommendation,
     RecommendationQueryResponseNoValidOption,

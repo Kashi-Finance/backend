@@ -640,7 +640,7 @@ query = (
 **However**, we can improve category fetching for invoices:
 
 ```python
-# backend/agents/invoice/tools.py
+# backend/llm/invoice/tools.py (renamed from backend/agents/ in 2026)
 # Current: Fetches categories separately
 def get_user_categories(supabase_client, user_id: str) -> List[Dict]:
     result = supabase_client.table("category").select("*").or_(...).execute()

@@ -1,11 +1,11 @@
 ---
-description: "Scaffold a new FastAPI endpoint that calls one allowed ADK agent"
+description: "Scaffold a new FastAPI endpoint in the Kashi Finances backend (service or single-shot LLM workflow, no agent framework)"
 mode: Beast Mode
 ---
 
 You are helping build or update a FastAPI endpoint in the **Kashi Finances backend**.
 
-Follow **ALL rules below**. Do not skip any step. Do not introduce new agents, database tables, or fields that are not defined in the documentation.
+Follow **ALL rules below**. Do not skip any step. Do not introduce LLM workflows, database tables, or fields that are not defined in the documentation.
 
 ---
 
@@ -13,16 +13,17 @@ Follow **ALL rules below**. Do not skip any step. Do not introduce new agents, d
 
 * This backend serves the **Kashi Finances mobile app** via HTTP.
 
-* Some endpoints expose domain-specific functionality backed by **ADK agents (Google ADK)**.
+* Most endpoints are pure CRUD over services. Exactly two endpoints use
+  single-shot LLM workflows (no agent framework, no Google ADK):
+  invoice OCR (`backend/llm/invoice/`) and recommendations
+  (`backend/services/recommendation_service.py`).
 
 * You MUST comply with and frequently consult:
 
   * `.github/instructions/api-architecture.instructions.md`
-  * `.github/instructions/adk-agents.instructions.md`
+  * `.github/instructions/llm-workflows.instructions.md`
   * `.github/instructions/db.instructions.md`
   * `DB-documentation.md`
-
-* Always use the **most recent version** of the Google ADK documentation, available at [https://google.github.io/adk-docs/](https://google.github.io/adk-docs/).
 
 * Always verify table fields, relationships, and deletion rules directly from **DB-documentation.md** before adding or modifying any database logic.
 
@@ -52,18 +53,20 @@ Follow **ALL rules below**. Do not skip any step. Do not introduce new agents, d
 
 ---
 
-## 4. Agent interaction rules
+## 4. LLM-workflow interaction rules (only if the endpoint uses one)
 
-* If the endpoint’s domain logic involves AI assistance or semantic reasoning, it may call **exactly one allowed ADK agent** or an **AgentTool** (another adk agent but as a tool for the main Agent).
-* Always check the **latest ADK docs** for correct invocation syntax and payload structure.
-* Before calling an agent, verify that the request is within the agent’s supported domain.
-* If it’s not in-scope, do **not** call ADK or Gemini; instead raise `HTTP 400` with:
+* Most endpoints MUST NOT call any LLM workflow (pure service + DB logic).
+* If the endpoint's domain logic involves the invoice OCR or recommendation
+  workflow, it may call **exactly that one workflow's public function**
+  (`run_invoice_agent()` or `query_recommendations()`).
+* Before calling a workflow, verify that the request is within its supported domain.
+* If it's not in-scope, do **not** call Gemini; instead raise `HTTP 400` with:
 
   ```json
   {"error": "out_of_scope", "details": "..."}
   ```
-* Pass a **strictly typed payload** to the agent, never raw JSON.
-* Normalize the agent’s structured response to match the defined `ResponseModel`.
+* Pass a **strictly typed payload** to the workflow, never raw JSON.
+* Normalize the workflow's structured response to match the defined `ResponseModel`.
 
 ---
 
@@ -82,7 +85,7 @@ Follow **ALL rules below**. Do not skip any step. Do not introduce new agents, d
 * Use `logger = logging.getLogger(__name__)`.
 * Log only high-level actions, for example:
 
-  * "Agent invoked successfully"
+  * "Workflow invoked successfully"
   * "Data persisted"
 * **Never** log sensitive data (invoice text, raw receipts, user financial details, or embeddings).
 
@@ -94,7 +97,8 @@ Follow **ALL rules below**. Do not skip any step. Do not introduce new agents, d
 
   * Add or extend a router file under `backend/routes/...`
   * Define or reuse schemas in `backend/schemas/...`
-  * Import and use the correct ADK agent from `backend/agents/...`
+  * Import and use the correct service or LLM workflow function
+    (`backend/services/...` or `backend/llm/...`)
   * Expose a FastAPI route using `@router.post(...)`, `@router.get(...)`, etc., with `response_model=ResponseModel`.
   * Follow all auth, validation, and persistence steps outlined above.
 
@@ -103,7 +107,7 @@ Follow **ALL rules below**. Do not skip any step. Do not introduce new agents, d
   * Route path and HTTP method.
   * Request and response model summaries.
   * Auth requirements.
-  * Any specific agent interactions or orchestration details.
+  * Any specific LLM-workflow interactions.
 
 ---
 
@@ -121,18 +125,17 @@ Return ONLY the code or diffs needed to implement the new or updated endpoint fo
 
 ## 9. Documentation Update
 
-* After implementing or modifying an ADK-related endpoint, ensure you update the following documentation files:
+* After implementing or modifying an LLM-workflow endpoint, ensure you update the following documentation files:
 
-  * API-endpoints.md — Include method, route, models, auth, and agent interactions.
+  * API-endpoints.md — Include method, route, models, auth, and workflow interactions.
 
-  * kashi-agents-architecture.md — Reflect structural or orchestration changes among agents.
+  * kashi-agents-architecture.md — Reflect structural changes to the LLM workflows
+    (note: legacy filename; content describes single-shot workflows, not agents).
 
-  * The specific agent specification file, for example:
+  * The specific workflow specification file, for example:
 
-    * For recommendation-related endpoints → update recommendation-agent-specs.md
+    * For recommendation-related endpoints → update recommendation-system-specs.md
 
-    * For search tools → update search-agent-specs.md
+    * For invoice OCR → update invoice-agent-specs.md (legacy filename)
 
-    * For formatter tools → update formatter-agent-specs.md
-
-Each update must summarize the purpose, inputs/outputs, and how the endpoint or agent integrates within the Kashi Finances system.
+Each update must summarize the purpose, inputs/outputs, and how the endpoint or workflow integrates within the Kashi Finances system.

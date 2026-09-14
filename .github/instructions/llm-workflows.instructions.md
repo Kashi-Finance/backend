@@ -1,30 +1,37 @@
 ---
 applyTo: '**'
 ---
-# AI Agents & LLM Workflows Instructions
+# LLM Workflows Instructions
 
-This document defines how AI-powered components (agents and LLM workflows) are structured and how they interact with the API layer.
+This document defines how the two single-shot LLM workflows (no agent framework)
+are structured and how they interact with the API layer.
+
+> **Naming note (2026):** the package lives at `backend/llm/` (renamed from
+> `backend/agents/`). Identifiers like `run_invoice_agent` / `InvoiceAgentOutput`
+> keep legacy names for compatibility. There is no Google ADK (or any agent
+> framework) in this project — see §3 and §8.
 
 > **Architecture Note (December 2025):** The project uses simplified LLM workflows instead of complex multi-agent architectures. The recommendation system uses Gemini with Google Search grounding - all product recommendations come from real, current web data.
 
 
 ## 1. Active AI Components
 
-There are exactly **two (2)** AI-powered components in this project:
+There are exactly **two (2)** LLM workflows in this project (no agents, no ADK):
 
 ### 1.1 InvoiceAgent (Single-Shot Multimodal Workflow)
 - **Implementation:** Single-shot Gemini vision call
 - **Model:** Gemini (with vision capabilities)
 - **Purpose:** OCR and structured extraction from receipt images
-- **NOT an ADK agent:** Uses direct Gemini API, not Google ADK
+- **NOT an agent:** single-shot Gemini call via the google-genai SDK (no ADK, no tool loop)
 
 ### 1.2 Recommendation System (Web-Grounded LLM)
 - **Implementation:** Single-shot Gemini call with Google Search grounding
 - **Model:** Gemini 2.5 Flash (`gemini-2.5-flash`)
 - **Purpose:** Product recommendations based on user goals with REAL web data
-- **NOT an ADK agent:** Uses Google Gen AI SDK with Google Search tool
+- **NOT an agent:** single-shot Gemini call via the google-genai SDK with the Google Search tool (no ADK, no tool loop)
 
-No other agents are allowed unless explicitly approved.
+No other LLM workflows are allowed unless explicitly approved. Do NOT introduce
+an agent framework (Google ADK or similar runners/tool loops).
 
 
 ## 2. Component Details
@@ -32,7 +39,7 @@ No other agents are allowed unless explicitly approved.
 ### 2.1 InvoiceAgent ⚠️ **Single-Shot Multimodal Workflow**
 
 **Current Implementation:**
-InvoiceAgent is implemented as a **single-shot multimodal vision extraction workflow** using Gemini directly, **NOT using ADK**. This is because invoice extraction is a deterministic task that doesn't require agentic reasoning or tool orchestration.
+InvoiceAgent is implemented as a **single-shot multimodal vision extraction workflow** using Gemini directly, **with no agent framework**. This is because invoice extraction is a deterministic task that doesn't require agentic reasoning or tool orchestration.
 
 **Purpose:**
 - Accept an invoice image (base64-encoded) and user context
@@ -120,7 +127,7 @@ User Query → FastAPI Endpoint → recommendation_service.py → Gemini API →
 
 **Service Location:**
 - `backend/services/recommendation_service.py` - Main service file
-- `backend/agents/recommendation/prompts.py` - System and user prompt templates (XML-structured)
+- `backend/llm/recommendation/prompts.py` - System and user prompt templates (XML-structured)
 
 **Key Functions:**
 ```python
@@ -170,15 +177,15 @@ The following components are **deprecated** and should NOT be referenced or used
 | `schemas.py` (ADK) | ❌ Deleted | Pydantic schemas in `backend/schemas/` |
 
 **Do NOT:**
-- Create new ADK agents
+- Introduce an agent framework (Google ADK or similar) or new autonomous agents
 - Reference the old multi-agent architecture
-- Import from `backend.agents.recommendation.coordinator`
-- Import from `backend.agents.recommendation.tools`
+- Import from `backend.llm.recommendation.coordinator`
+- Import from `backend.llm.recommendation.tools`
 
 
 ## 4. Input/Output Contracts
 
-All AI components MUST define:
+All LLM workflows MUST define:
 - Strictly typed Python interfaces with type hints
 - Pydantic models for request/response validation
 - JSON-serializable output only
@@ -198,7 +205,7 @@ Never return unbounded free text. Always use structured JSON.
 
 ## 5. Domain Guardrails
 
-Every AI component MUST have guardrails:
+Every LLM workflow MUST have guardrails:
 
 **InvoiceAgent:**
 - Rejects non-receipt images
@@ -215,9 +222,9 @@ The API layer converts rejections into HTTP 400 with `{"error": "out_of_scope", 
 
 ## 6. Privacy and Persistence
 
-- AI components do NOT access the database directly
-- AI components do NOT bypass Row Level Security
-- AI components do NOT store or retrieve user data on their own
+- LLM workflows do NOT access the database directly
+- LLM workflows do NOT bypass Row Level Security
+- LLM workflows do NOT store or retrieve user data on their own
 - The API layer handles all persistence under RLS
 
 **Pattern:**
@@ -241,19 +248,19 @@ The API layer converts rejections into HTTP 400 with `{"error": "out_of_scope", 
 - API keys or tokens
 
 
-## 8. Adding New AI Components
+## 8. Adding New LLM Workflows
 
-If a new AI component is needed:
+If a new LLM workflow is needed:
 
-1. **Evaluate if ADK is truly needed:**
-   - Does the task require multi-step reasoning?
-   - Does it need dynamic tool selection?
-   - Can it be solved with a single prompt?
+1. **Do NOT introduce an agent framework:**
+   - No Google ADK (or similar) runners, AgentTools, or tool-calling loops.
+   - New AI features MUST be single-shot service calls following the patterns below.
+   - If multi-step reasoning seems unavoidable, prefer explicit prompt chaining
+     in a service module over any autonomous-agent design, and get explicit approval.
 
 2. **Prefer simple architectures:**
    - Single-shot prompts for deterministic tasks
    - Prompt Chaining for complex but predictable flows
-   - ADK only when agentic reasoning is unavoidable
 
 3. **Follow the established patterns:**
    - Fetch context before calling the AI component

@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from backend.main import app
-from backend.agents.invoice.types import InvoiceAgentOutput
+from backend.llm.invoice.types import InvoiceAgentOutput
 
 
 @pytest.fixture
@@ -152,7 +152,7 @@ def mock_invoice_agent_success():
     }
     
     # Mock the Gemini API client instead of run_invoice_agent directly
-    with patch("backend.agents.invoice.agent.genai.Client") as mock_client_class:
+    with patch("backend.llm.invoice.agent.genai.Client") as mock_client_class:
         # Create a mock client instance
         mock_client = mock_client_class.return_value
         
@@ -191,7 +191,7 @@ def mock_invoice_agent_invalid():
     }
     
     # Mock the Gemini API client
-    with patch("backend.agents.invoice.agent.genai.Client") as mock_client_class:
+    with patch("backend.llm.invoice.agent.genai.Client") as mock_client_class:
         mock_client = mock_client_class.return_value
         
         import json

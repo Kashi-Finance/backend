@@ -3,9 +3,12 @@ applyTo: '**'
 ---
 # API Architecture Instructions (FastAPI layer)
 
-This file tells you how to build and modify HTTP endpoints that expose our adk agents to the mobile app.
+This file tells you how to build and modify HTTP endpoints that expose domain logic
+— including two single-shot LLM workflows (invoice OCR, recommendations) — to the mobile app.
 
-Always use the most recent version of the Google ADK documentation when interacting with adk agents.
+No agent framework is used in this project (no Google ADK, no runners, no tool loops).
+LLM calls go through `backend/llm/` prompt builders + `backend/services/` via the
+google-genai SDK. Do NOT follow ADK documentation; it does not apply here.
 
 
 ## 1. Purpose of the HTTP layer
@@ -14,13 +17,13 @@ The FastAPI layer is the ONLY public surface for the mobile client. It is respon
 
 1. Authentication (Supabase Auth).
 2. Input validation with Pydantic.
-3. Domain/intention filtering (only forward valid, in-scope requests to the correct adk agent).
-4. Calling exactly one adk agent.
-5. Normalizing the agent output into a typed response model.
+3. Domain/intention filtering (only forward valid, in-scope requests to the correct service or LLM workflow).
+4. Calling at most one LLM workflow (most endpoints are pure CRUD and call none).
+5. Normalizing the service/workflow output into a typed response model.
 6. Returning a clean JSON response to the app.
-7. Calling persistence logic (if any) through the DB layer, never directly inside the agent.
+7. Calling persistence logic (if any) through the DB layer, never directly inside the LLM call.
 
-No endpoint may hand unvalidated or unauthenticated raw user input directly to Gemini / ADK.
+No endpoint may hand unvalidated or unauthenticated raw user input directly to Gemini.
 
 
 ## 2. Directory Layout (expected)
@@ -44,14 +47,18 @@ No endpoint may hand unvalidated or unauthenticated raw user input directly to G
     - return `user_id` (`auth.uid()`)
     - raise an HTTP 401 if invalid
 
-- `backend/agents/`
-  - Implementations of the adk agents (InvoiceAgent, RecommendationCoordinatorAgent, SearchAgent, FormatterAgent).
-  - These are not FastAPI endpoints. They are internal callable logic powered by Google ADK.
+- `backend/llm/` (legacy dir name "agents")
+  - Single-shot LLM workflow builders: invoice OCR (`llm/invoice/`) and
+    recommendation prompts (`llm/recommendation/`).
+  - These are not FastAPI endpoints and not agents. They are internal callable
+    logic: prompt builders + one `google-genai` SDK call each, returning
+    structured output. Persistence is never done here.
 
 - `backend/services/`
-  - Glue/orchestration code that adapts endpoint requests to agent calls.
-  - Enforces domain filtering and scope checking before calling an agent.
-  - Maps agent output into `ResponseModel`.
+  - Glue/orchestration code that adapts endpoint requests to service logic and,
+    where needed, to one LLM workflow call.
+  - Enforces domain filtering and scope checking before calling an LLM workflow.
+  - Maps workflow output into `ResponseModel`.
 
 - `backend/db/` (or equivalent data access layer)
   - Functions that perform reads/writes under RLS rules.
@@ -68,10 +75,10 @@ Every protected FastAPI endpoint MUST do:
 3. Extract `user_id` from the token (`auth.uid()`).
 4. If verification fails or token is missing → raise `HTTPException(status_code=401, detail={"error":"unauthorized","details":"invalid or missing token"})`.
 5. Ignore any `user_id` passed in the body or querystring. The caller cannot override it.
-6. From that point on, all downstream actions (DB reads/writes, agent calls) are assumed to happen on behalf of that `user_id`.
+6. From that point on, all downstream actions (DB reads/writes, LLM-workflow calls) are assumed to happen on behalf of that `user_id`.
 7. Optionally load the user's profile (country, currency_preference, etc.) for localization / recommendation context.
 
-This step happens BEFORE any interaction with an adk agent, unless the endpoint is explicitly documented as public.
+This step happens BEFORE any interaction with an LLM workflow, unless the endpoint is explicitly documented as public.
 
 
 ## 4. Endpoint Flow (STRICT CONTRACT)
@@ -90,32 +97,30 @@ Step 2. Parse / Validate Request
   - enforce ranges / enums where known.
 
 Step 3. Domain & Intent Filter
-- Determine which adk agent will be called.
-- Check if the request intent is in-scope for that agent.
+- Determine whether an LLM workflow is needed at all (most endpoints: none).
+- If one is used, check that the request intent is in-scope for that workflow.
   - If it's out of scope:
-    - DO NOT call the agent.
+    - DO NOT call the workflow.
     - return `HTTPException(status_code=400, detail={"error":"out_of_scope","details":"...explanation..."})`.
 - The reason for this filter:
-  - adk agents MUST NOT handle unrelated questions.
+  - LLM workflows MUST NOT handle unrelated questions.
   - We must not waste compute / money on Gemini for irrelevant prompts.
   - We avoid leaking sensitive financial data to the wrong context.
 
-Step 4. Call ONE adk Agent
-- Create a structured payload for the selected adk agent.
-- Call the agent using its public method, not by chatting with it as if it were a general model.
-- The allowed adk agents are:
-  - InvoiceAgent
-  - RecommendationCoordinatorAgent
-  - SearchAgent (AgentTool of RecommendationCoordinatorAgent)
-  - FormatterAgent (AgentTool of RecommendationCoordinatorAgent)
-- For recommendation-related flows:
-  - The FastAPI endpoint should call `RecommendationCoordinatorAgent`.
-  - `SearchAgent` and `FormatterAgent` are internal AgentTools that `RecommendationCoordinatorAgent` uses. Do NOT call them directly from the HTTP layer.
-
-Always use the most recent version of the Google ADK documentation for how to invoke these adk agents and their AgentTools.
+Step 4. Call at most ONE LLM workflow
+- Create a strictly typed payload for the workflow (never raw JSON) and call its
+  public function (e.g. `run_invoice_agent()` for invoice OCR,
+  `query_recommendations()` for recommendations).
+- The ONLY LLM-backed flows are:
+  - Invoice OCR (`POST /invoices/ocr` → `run_invoice_agent()`)
+  - Recommendations (`POST /recommendations/query|/retry` → `recommendation_service`)
+- The deleted ADK prototype (`RecommendationCoordinatorAgent`, `SearchAgent`,
+  `FormatterAgent`) MUST NOT be referenced or reintroduced. For recommendation
+  flows the endpoint calls the service layer, which performs the single grounded
+  Gemini call internally.
 
 Step 5. Map Output -> ResponseModel
-- Take the agent's structured output.
+- Take the service/workflow's structured output.
 - Convert / validate it into a Pydantic `ResponseModel`.
 - The FastAPI route decorator MUST set `response_model=ResponseModel`.
 - Return that `ResponseModel` (or a dict that exactly matches it). Do not wrap it arbitrarily in `{ "status": "ok", ... }` unless the response model explicitly has that shape.
@@ -163,12 +168,12 @@ If the agent output does not match, normalize it before persisting.
 - Example:
     raise HTTPException(
         status_code=400,
-        detail={"error": "out_of_scope", "details": "SearchAgent cannot answer personal finance therapy questions."}
+        detail={"error": "out_of_scope", "details": "Recommendations workflow cannot answer personal finance therapy questions."}
     )
 
 - Logging:
   - Create `logger = logging.getLogger(__name__)`.
-  - Log high-level actions (e.g. "InvoiceAgent invoked", "RecommendationCoordinatorAgent rejected out_of_scope").
+  - Log high-level actions (e.g. "Invoice OCR workflow invoked", "Recommendation query processed").
   - Do NOT log:
     - raw invoice images,
     - full `extracted_text`,
@@ -195,8 +200,8 @@ No stack traces or secret keys in API responses.
 
 - [ ] Auth via Supabase Bearer token (unless public by design).
 - [ ] Parse request into strict Pydantic RequestModel.
-- [ ] Domain/intention filter BEFORE calling any adk agent.
-- [ ] Call ONE allowed adk agent.
+- [ ] Domain/intention filter BEFORE calling any LLM workflow (if one is used).
+- [ ] Call at most ONE allowed LLM workflow (most endpoints: none).
 - [ ] Map output into strict Pydantic ResponseModel and return it with `response_model=...`.
 - [ ] If invoice data is involved, enforce the exact EXTRACTED_INVOICE_TEXT_FORMAT for `invoice.extracted_text`.
 - [ ] No direct SQL or schema invention; leave `# TODO(db-team): ...`.
@@ -366,10 +371,10 @@ This section documents the complete invoice API surface.
 
 ---
 
-### 9.5 InvoiceAgent Architecture Summary
+### 9.5 Invoice OCR workflow summary (legacy name: InvoiceAgent)
 
 **Current Implementation (as of Nov 2025):**
-- **NOT an ADK agent** - uses single-shot multimodal LLM workflow
+- **No agent framework** - single-shot multimodal LLM workflow
 - **Why:** Invoice extraction is deterministic; doesn't need agentic reasoning
 - **Input:** Base64-encoded receipt image (REQUIRED, no OCR text fallback)
 - **Context:** User categories and profile passed as parameters by endpoint
@@ -386,7 +391,7 @@ This section documents the complete invoice API surface.
 5. Map agent output to response model
 6. Handle DRAFT vs INVALID_IMAGE status
 
-**Agent Does NOT:**
+**Workflow Does NOT:**
 - Fetch its own data (categories, profile)
 - Use function-calling or tool orchestration
 - Iterate or retry extractions

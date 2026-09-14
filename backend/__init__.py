@@ -1,6 +1,8 @@
 """
-Kashi Finances Backend - FastAPI application for orchestrating adk agents.
+Kashi Finances Backend - FastAPI application for personal finance management
+with two single-shot LLM workflows (invoice OCR, recommendations).
 
 This package contains the main application entrypoint, routes, schemas,
-authentication, agents, services, and utilities.
+authentication, LLM workflows (backend/llm, legacy name "agents"),
+services, and utilities. No agent framework (e.g. Google ADK) is used.
 """

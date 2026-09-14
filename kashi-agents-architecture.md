@@ -1,11 +1,18 @@
-# 🧠 Kashi Finances — General Agent Architecture Documentation
+# 🧠 Kashi Finances — LLM Workflows Architecture (legacy filename)
+
+> **Naming note (2026):** this file keeps its historical filename, but nothing
+> described here is an autonomous agent and no agent framework (Google ADK or
+> similar) is used. The project has exactly **two single-shot LLM workflows**
+> (invoice OCR + grounded recommendations) via the `google-genai` SDK.
+> The ADK-style prototype was deleted in 11/2025 and the DeepSeek phase was
+> replaced by Gemini grounding in 01/2025 (see §2).
 
 ## Overview
-Kashi Finances is built around a **multi-agent architecture** that combines automation, modularity, and scalability.  
-Each agent fulfills a specialized task within the ecosystem — from invoice processing to personalized recommendations — all coordinated through standardized communication channels and cloud infrastructure.
+Kashi Finances combines a FastAPI backend, Supabase Postgres, and two single-shot
+LLM workflows for receipt OCR and grounded product recommendations.
 
 The system is designed to maintain **clarity of responsibility**:
-- Agents handle intelligence and automation.
+- Single-shot LLM calls handle extraction and grounded search.
 - The backend orchestrates workflows and ensures data integrity.
 - The frontend provides a guided, human-confirmed interface.
 
@@ -17,19 +24,19 @@ The system is designed to maintain **clarity of responsibility**:
 | Layer | Description | Key Technologies |
 |-------|--------------|------------------|
 | **Frontend (Flutter + Riverpod)** | Mobile application providing user interface, state management, and connection to backend endpoints. | Flutter, Dart |
-| **Backend API (FastAPI)** | RESTful API deployed on Cloud Run. Orchestrates agent calls, handles authentication, and manages persistence. | FastAPI, Python |
+| **Backend API (FastAPI)** | RESTful API deployed on Cloud Run. Runs domain logic plus two single-shot LLM workflows, handles authentication, and manages persistence. | FastAPI, Python |
 | **Database & Storage** | Central data layer with relational structure and vector search for semantic AI operations. | Supabase (PostgreSQL + pgvector, Storage, Auth) |
 | **AI Components** | LLM-powered workflows for OCR and recommendations using optimized architectures. | Gemini API, DeepSeek V3.2 |
 
 ---
 
-## ⚙️ Agent Ecosystem
+## ⚙️ LLM Workflows (2 total, no agents)
 
-### 1. **InvoiceAgent** (Single-Shot Multimodal Workflow)
+### 1. **Invoice OCR workflow** (legacy name: InvoiceAgent; single-shot multimodal)
 
 Automates OCR and structured extraction from receipt/invoice images using a single-shot multimodal workflow.
 
-- **Purpose:** Convert an image into a strict, validated JSON extraction that the frontend shows to the user for confirmation. The agent is responsible only for extraction and structured suggestions — it never persists data.
+- **Purpose:** Convert an image into a strict, validated JSON extraction that the frontend shows to the user for confirmation. The workflow is responsible only for extraction and structured suggestions — it never persists data.
 
 - **Implementation:**
   - Single-shot LLM workflow (one prompt → one Gemini call)
@@ -50,21 +57,23 @@ Automates OCR and structured extraction from receipt/invoice images using a sing
   - `proposed_name`: string | null
 
 - **Behavioral Rules:**
-  - The agent must NOT write to the database or call external tools
-  - The agent must NOT invent category IDs or persist images
+  - The workflow must NOT write to the database or call external tools
+  - The workflow must NOT invent category IDs or persist images
   - All persistence is done by the backend after user confirmation
   - Committed invoices are immutable after `/invoices/commit`
 
 ---
 
-### 2. **Recommendation System** (Prompt Chaining Architecture)
+### 2. **Recommendation workflow** (single-shot grounded LLM; ex-prototype deleted)
 
-> **Architecture Note (November 2025):** The recommendation system was refactored from a multi-agent ADK architecture (RecommendationCoordinatorAgent → SearchAgent → FormatterAgent) to a simplified **Prompt Chaining** approach using DeepSeek V3.2.
+> **Architecture Note (November 2025):** The recommendation system was refactored from a multi-agent ADK prototype (RecommendationCoordinatorAgent → SearchAgent → FormatterAgent) to a simplified single-call approach. That prototype was **deleted** — it is history, not architecture.
+>
+> **Update (January 2025 → current):** the DeepSeek V3.2 phase below was itself replaced by **Gemini 2.5 Flash + Google Search grounding** (`backend/services/recommendation_service.py`, prompts in `backend/llm/recommendation/prompts.py`). All recommendations come from real, current web data with grounding metadata. See `recommendation-system-specs.md` v2.0/v3.1.
 
 - **Purpose:** Provide personalized product recommendations based on user's purchase goals, budget constraints, and preferences.
 
-- **Implementation:**
-  - **Pattern:** Prompt Chaining (single LLM call)
+- **Implementation (historical DeepSeek phase; superseded by Gemini grounding):**
+  - **Pattern:** Single LLM call
   - **Model:** DeepSeek V3.2 (`deepseek-chat`)
   - **API:** OpenAI-compatible
   - **Temperature:** 0.0 (deterministic)
@@ -75,7 +84,7 @@ Automates OCR and structured extraction from receipt/invoice images using a sing
   User Query → FastAPI Endpoint → recommendation_service.py → DeepSeek API → JSON Response → Pydantic Model
   ```
 
-- **Cost Comparison:**
+- **Cost Comparison (historical: ADK prototype vs single-call):**
   | Metric | Previous (ADK) | Current (Prompt Chaining) |
   |--------|----------------|---------------------------|
   | LLM Calls per Request | 3 (Coordinator + Search + Formatter) | 1 |
@@ -130,13 +139,16 @@ Automates OCR and structured extraction from receipt/invoice images using a sing
 
 ---
 
-### 3. **Future Agents** (Planned)
+### 3. **Future AI ideas** (parked — NOT approved)
 
-| Agent | Description | Status |
+> No autonomous agents are planned. Any new AI feature requires explicit approval
+> and MUST be a single-shot LLM workflow (no agent framework).
+
+| Idea | Description | Status |
 |-------|-------------|--------|
-| **InsightAgent** | Analyzes user habits for spending trends | Planned |
-| **PriceTrackerAgent** | Monitors price fluctuations for saved items | Planned |
-| **BudgetAdvisor** | Suggests budget adjustments aligned with user goals | Planned |
+| **Spending insights** | Analyzes user habits for spending trends | Parked |
+| **Price tracking** | Monitors price fluctuations for saved items | Parked |
+| **Budget advice** | Suggests budget adjustments aligned with user goals | Parked |
 
 ---
 
@@ -150,11 +162,11 @@ Automates OCR and structured extraction from receipt/invoice images using a sing
 - **pgvector:** Enables semantic similarity for future search features
 
 ### Context Fetching Pattern
-Both the InvoiceAgent and Recommendation System follow the same context pattern:
+Both the invoice OCR workflow and the Recommendation workflow follow the same context pattern:
 1. FastAPI endpoint authenticates user via Supabase Auth
 2. Endpoint fetches user profile (country, currency_preference)
 3. Context is passed to the LLM workflow in the prompt
-4. Agent/workflow returns structured output (never writes to DB)
+4. Workflow returns structured output (never writes to DB)
 5. Endpoint maps output to Pydantic models and returns response
 
 ---
@@ -174,8 +186,8 @@ Both the InvoiceAgent and Recommendation System follow the same context pattern:
 |-----------|----------|-------------------|
 | Backend API | Google Cloud Run | Containerized (Docker) |
 | Database | Supabase Cloud | Managed PostgreSQL + pgvector |
-| Invoice OCR | Google Gemini API | Direct API calls |
-| Recommendations | DeepSeek API | OpenAI-compatible client |
+| Invoice OCR | Google Gemini API | Direct single-shot calls (google-genai SDK) |
+| Recommendations | Google Gemini API + Search grounding | Single-shot calls (google-genai SDK) |
 
 ---
 
@@ -186,19 +198,20 @@ Both the InvoiceAgent and Recommendation System follow the same context pattern:
 - **Strict contracts:** Pydantic models for all request/response types
 - **Graceful degradation:** All errors return structured responses, never 500 errors
 - **Localization:** System adapts to user's language, country, and currency preferences
-- **Cost optimization:** Prefer efficient architectures (Prompt Chaining over multi-agent)
+- **Cost optimization:** Prefer single-shot calls over multi-step designs
 
 ---
 
 ## 🚀 Summary
 
-The Kashi Finances agent ecosystem forms an intelligent platform capable of:
-- Automating expense recording via OCR (InvoiceAgent)
-- Offering verified, contextual product recommendations (Prompt Chaining)
+The Kashi Finances backend is an API-first platform with two single-shot LLM
+workflows (no agents, no agent framework), capable of:
+- Automating expense recording via OCR (invoice workflow)
+- Offering verified, contextual product recommendations (grounded single call)
 - Managing budgets, goals, and insights with scalable cloud components
 
-This architecture ensures **accuracy, transparency, and user control**, aligning advanced AI workflows with real-world financial management.
+This architecture ensures **accuracy, transparency, and user control**, aligning LLM-assisted workflows with real-world financial management.
 
 ---
 
-*Last Updated: November 2025*
+*Last Updated: September 2026 (ADK/agent naming purged; DeepSeek→Gemini grounding noted)*
